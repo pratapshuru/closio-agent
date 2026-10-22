@@ -1,0 +1,4 @@
+#!/bin/sh
+# read-only Jira ticket lookup the dev bot may run while planning
+DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+exec node --no-warnings=ExperimentalWarning "$DIR/src/tools/agent-jira.ts" "$@"

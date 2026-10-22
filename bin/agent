@@ -1,0 +1,4 @@
+#!/bin/sh
+# resolve symlinks so `npm link` works
+DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+exec node --no-warnings=ExperimentalWarning "$DIR/src/cli.ts" "$@"

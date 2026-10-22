@@ -1,0 +1,21 @@
+# Copy to agent.local.yaml and set your own paths. Anything here overrides agent.config.yaml.
+repos:
+  frontend:         { path: ~/closio-web-v2 }
+  ws1:              { path: ~/nodejs-ws1closio }
+  ws2targetsales:   { path: ~/nodejs-ws2targetsales }
+  ws2notifications: { path: ~/nodejs-ws2notification }
+  ws2pricingengine: { path: ~/nodejs-ws2pricingengine }
+  ws2closio:        { path: ~/nodejs-ws2closio }
+
+# people:
+#   tech_lead: { name: Your Lead, email: lead@company.com, gitlab_username: lead.name }
+#   pm:        { name: Your PM, email: pm@company.com }
+
+# models:
+#   default_profile: balanced
+
+# VPN auto-connect (see README, "VPN"):
+# vpn:
+#   gateway: vpnwm.japfacomfeed.co.id:443
+#   realm: sso
+#   trusted_cert: <sha256 digest openfortivpn prints on first connect>

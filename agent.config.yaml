@@ -1,0 +1,204 @@
+# Shared team config. Machine-specific values (repo paths, model overrides)
+# go in agent.local.yaml, secrets go in .env. Both are gitignored.
+
+jira:
+  base_url: https://productclosio.atlassian.net
+  project: SCRUM
+  statuses:
+    in_development: In Development
+    code_review: Code Review
+    ready_for_test: Ready For Test
+    blocked: Blocked
+
+gitlab:
+  base_url: https://jcvs.japfacomfeed.co.id
+  mr:
+    title_format: "{key} - {summary}"
+    draft: false
+    remove_source_branch: true
+    reviewers: []          # gitlab usernames, e.g. the tech lead
+  reply_to_mr_comments: true
+
+# who gets which unresolved question; jira_account_id is looked up from email if missing
+people:
+  pm:
+    name: PM
+  tech_lead:
+    name: Tech Lead
+
+repos:
+  frontend:
+    kind: frontend
+    description: Vue 3 + Vite + Pinia + Vuetify web backoffice
+    remote_path: closio/frontend-web/closio-web-v2
+    target_branch: development
+    commit_format: "feat({key}): {summary}"
+    install: symlink
+    hints: [frontend, figma, screen, vue, ui]
+    # never edited by the bots (edits are undone); add a line per file or folder (** = whole folder)
+    protected:
+      - src/views/customerOrder/**
+      - src/views/Login.vue
+      - src/views/forgotPassword/**
+      - src/stores/forgotPassword.ts
+      - src/components/ForgotPasswordLayout.vue
+      - src/components/OTPInput.vue
+    gates:
+      focused:
+        - cmd: npx vitest related --run --reporter=json --outputFile={out} {files}
+          parser: vitest-json
+          scope: changed
+          match: '^src/.*\.(ts|js|vue)$'
+          timeout_min: 15
+      final:
+        - cmd: npx vitest run --reporter=json --outputFile={out}
+          parser: vitest-json
+          timeout_min: 30
+        - cmd: npx vite build --outDir {tmp}/dist
+          parser: exit-code
+          timeout_min: 15
+
+  ws1:
+    kind: backend-gateway
+    description: WS1 gateway. Parses session, forwards to WS2 with S2S headers. No business rules.
+    remote_path: sfa-v2/backend-nodejs/nodejs-ws1closio
+    target_branch: develop
+    commit_format: "feat({key}): {summary}"
+    install: symlink
+    hints: [ws1, gateway, backend]
+    # never edited by the bots (edits are undone); existing migrations are always protected too
+    protected:
+      - src/middlewares/validateSchema.js
+    gates:
+      focused:
+        - cmd: npx eslint --config eslint.config.mjs -f json -o {out} {files}
+          parser: eslint-json
+          scope: changed
+          match: '\.(js|mjs|cjs)$'
+      final:
+        - cmd: npx eslint --config eslint.config.mjs -f json -o {out} {files}
+          parser: eslint-json
+          scope: changed
+          match: '\.(js|mjs|cjs)$'
+
+  ws2targetsales:
+    kind: backend-service
+    description: WS2 Target Sales and Incentive Engine business logic and Postgres persistence
+    remote_path: target-sales/backend/nodejs-ws2targetsales
+    target_branch: develop
+    commit_format: "feat({key}): {summary}"
+    install: symlink
+    # husky runs `npm run coverage:check`, which crashes locally (tests need env the suite never loads)
+    commit_hooks: skip
+    hints: [target sales, incentive, business 1, business 2, ageing, payout, slab, jot]
+    # unit and API tests read env at import time; .env.example has safe placeholders.
+    # API tests stub the service layer, so no database is needed.
+    gates: &ws2gates
+      focused:
+        - cmd: npx eslint --config eslint.config.mjs -f json -o {out} {files}
+          parser: eslint-json
+          scope: changed
+          match: '\.(js|mjs|cjs)$'
+        - cmd: DOTENV_CONFIG_PATH=.env.example npx cross-env NODE_ENV=test APP_LOG_DIR=./.test-logs mocha --require dotenv/config --recursive test/unit --exit --reporter json --reporter-option output={out}
+          parser: mocha-json
+          timeout_min: 15
+        - cmd: DOTENV_CONFIG_PATH=.env.example npx cross-env NODE_ENV=test APP_LOG_DIR=./.test-logs PORT=0 mocha --require dotenv/config --recursive test/api --exit --reporter json --reporter-option output={out}
+          parser: mocha-json
+          timeout_min: 15
+      final:
+        - cmd: DOTENV_CONFIG_PATH=.env.example npx cross-env NODE_ENV=test APP_LOG_DIR=./.test-logs mocha --require dotenv/config --recursive test/unit --exit --reporter json --reporter-option output={out}
+          parser: mocha-json
+          timeout_min: 20
+        - cmd: DOTENV_CONFIG_PATH=.env.example npx cross-env NODE_ENV=test APP_LOG_DIR=./.test-logs PORT=0 mocha --require dotenv/config --recursive test/api --exit --reporter json --reporter-option output={out}
+          parser: mocha-json
+          timeout_min: 20
+        - cmd: npx eslint --config eslint.config.mjs -f json -o {out} {files}
+          parser: eslint-json
+          scope: changed
+          match: '\.(js|mjs|cjs)$'
+
+  ws2notifications:
+    kind: backend-service
+    description: WS2 notifications and broadcasts
+    remote_path: closio/backend/nodejs-ws2notification
+    target_branch: develop
+    commit_hooks: skip
+    hints: [notification, broadcast]
+    gates: *ws2gates
+
+  ws2pricingengine:
+    kind: backend-service
+    description: WS2 pricing engine
+    remote_path: pricing-engine/backend/nodejs-ws2pricingengine
+    target_branch: develop
+    commit_hooks: skip
+    hints: [pricing]
+    gates: *ws2gates
+
+  ws2closio:
+    kind: backend-service
+    description: WS2 core Closio services (users, salesperson, products)
+    remote_path: sfa-v2/backend-nodejs/nodejs-ws2closio
+    target_branch: develop
+    hints: [user, salesperson, product]
+    gates: *ws2gates
+
+# used only when a ticket does not say which repos it needs; the dev agent confirms during planning
+routing:
+  frontend: [frontend]
+  backend: [ws1]
+
+# pick with --profile <name>, or override one role with --set dev=claude:opus:high
+# planner = the once-per-sprint `agent sprint-plan` analysis; if a profile leaves it out, the dev model is used
+models:
+  default_profile: quality
+  profiles:
+    quality:
+      planner:    { provider: claude, model: opus, effort: high }
+      dev:        { provider: claude, model: opus, effort: high }
+      reviewer:   { provider: codex,  model: gpt-5.6-sol, effort: high }
+      simplifier: { provider: claude, model: sonnet, effort: medium }
+    balanced:
+      dev:        { provider: claude, model: sonnet, effort: high }
+      reviewer:   { provider: codex,  model: gpt-5.6-terra, effort: medium }
+      simplifier: { provider: claude, model: sonnet, effort: low }
+    cheap:
+      dev:        { provider: claude, model: sonnet, effort: low }
+      reviewer:   { provider: codex,  model: gpt-5.6-luna, effort: low }
+      simplifier: { provider: claude, model: haiku }
+    claude-only:
+      dev:        { provider: claude, model: opus, effort: high }
+      reviewer:   { provider: claude, model: sonnet, effort: high }
+      simplifier: { provider: claude, model: sonnet }
+    # cheapest models, for checking that everything is wired up (results don't need to be good)
+    smoke:
+      planner:    { provider: claude, model: haiku }
+      dev:        { provider: claude, model: haiku }
+      # mid-level: the cheapest codex (luna, low) looped while writing a review
+      reviewer:   { provider: codex,  model: gpt-5.6-terra, effort: medium }
+      simplifier: { provider: claude, model: haiku }
+    fake:
+      dev:        { provider: fake }
+      reviewer:   { provider: fake }
+      simplifier: { provider: fake }
+
+limits:
+  review_rounds: 3
+  gate_fix_attempts: 2
+  agent_timeout_min: 45
+  feedback_rounds: 2
+
+# Where the pipeline finds design material when Figma MCP is not available.
+# Checked per ticket: figma/<KEY>/ here, then the frontend repo's .claude/<KEY>/ and .claude/<number>/
+# (their figma/ subfolder if present). Screenshots, CSS dumps and md files listing image paths all work.
+design:
+  folder: figma
+  legacy_folders: true
+  legacy_number_projects: [SCRUM]
+
+workspace:
+  runs_dir: runs
+  worktrees_dir: worktrees
+  sprints_dir: sprints
+  handoffs_dir: handoffs
+  briefs_dir: briefs

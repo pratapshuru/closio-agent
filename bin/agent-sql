@@ -1,0 +1,66 @@
+#!/usr/bin/env node
+// Read-only SQL for agents: agent-sql <db-key> "SELECT ..."   (agent-sql --list shows the keys)
+// Each database is set in closio-agent/.env, either as separate lines (easiest, no escaping):
+//   DB_RO_<KEY>_HOST, DB_RO_<KEY>_USER, DB_RO_<KEY>_PASSWORD, DB_RO_<KEY>_NAME
+//   optional: DB_RO_<KEY>_PORT (5432), DB_RO_<KEY>_SCHEMA, DB_RO_<KEY>_SSL (true)
+// or as one URL: DB_RO_URL_<KEY>. A DB role with only SELECT grants is safest; writes are blocked below either way.
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const root = path.resolve(import.meta.dirname, '..');
+if (fs.existsSync(path.join(root, '.env'))) process.loadEnvFile(path.join(root, '.env'));
+
+const keys = () => [
+  ...new Set(
+    Object.keys(process.env)
+      .map((k) => k.match(/^DB_RO_URL_(\w+)$/)?.[1] ?? k.match(/^DB_RO_(\w+?)_HOST$/)?.[1])
+      .filter(Boolean),
+  ),
+];
+
+const [repo, query] = process.argv.slice(2);
+if (repo === '--list') {
+  for (const k of keys()) console.log(`${k.toLowerCase()}: ${process.env[`DB_RO_${k}_NAME`] ?? '(from URL)'}${process.env[`DB_RO_${k}_SCHEMA`] ? `, schema ${process.env[`DB_RO_${k}_SCHEMA`]}` : ''}`);
+  process.exit(0);
+}
+if (!repo || !query) {
+  console.error('usage: agent-sql <db-key> "SELECT ..."   (agent-sql --list shows the keys)');
+  process.exit(2);
+}
+const key = repo.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+const url = process.env[`DB_RO_URL_${key}`];
+const host = process.env[`DB_RO_${key}_HOST`];
+if (!url && !host) {
+  console.error(`No database '${repo}' configured. Known: ${keys().map((k) => k.toLowerCase()).join(', ') || 'none'}. Write the query into your output for a human instead.`);
+  process.exit(2);
+}
+const sql = query.trim().replace(/;\s*$/, '');
+if (!/^(select|with|explain|show|table)\b/i.test(sql) || sql.includes(';')) {
+  console.error('Only a single SELECT/WITH/EXPLAIN/SHOW statement is allowed.');
+  process.exit(2);
+}
+const schema = process.env[`DB_RO_${key}_SCHEMA`];
+// separate lines go in as psql's own variables, so special characters in the password need no escaping
+const conn = url
+  ? {}
+  : {
+      PGHOST: host,
+      PGPORT: process.env[`DB_RO_${key}_PORT`] ?? '5432',
+      PGUSER: process.env[`DB_RO_${key}_USER`],
+      PGPASSWORD: process.env[`DB_RO_${key}_PASSWORD`],
+      PGDATABASE: process.env[`DB_RO_${key}_NAME`],
+      PGSSLMODE: process.env[`DB_RO_${key}_SSL`] === 'false' ? 'disable' : 'require',
+    };
+// the server enforces read-only for the whole session, on top of the statement check
+const options = `-c default_transaction_read_only=on -c statement_timeout=15000${schema ? ` -c search_path=${schema}` : ''}`;
+const args = [...(url ? [url] : []), '-X', '-v', 'ON_ERROR_STOP=1', '-P', 'pager=off', '-c', 'BEGIN READ ONLY', '-c', sql, '-c', 'ROLLBACK'];
+const res = spawnSync('psql', args, {
+  env: { ...process.env, ...conn, PGOPTIONS: options, PGCONNECT_TIMEOUT: '10' },
+  encoding: 'utf8',
+  maxBuffer: 10 * 1024 * 1024,
+});
+const out = (res.stdout || '').split('\n');
+process.stdout.write(out.slice(0, 300).join('\n') + (out.length > 300 ? `\n… ${out.length - 300} more lines truncated\n` : '\n'));
+if (res.stderr) process.stderr.write(res.stderr);
+process.exit(res.status ?? 1);
