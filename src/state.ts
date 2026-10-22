@@ -6,7 +6,7 @@ import type { Design } from './design.ts';
 import type { SprintContext } from './sprint.ts';
 import type { Parent } from './stack.ts';
 import type { Baseline } from './gates.ts';
-import type { Finding, Plan, Question } from './schemas.ts';
+import type { Call, Finding, Plan, Question } from './schemas.ts';
 import { ensureDir, now, readJson, writeJson } from './util.ts';
 
 export type Phase =
@@ -89,7 +89,7 @@ export type RunState = {
   alignment?: Array<{ ticket: string; problem: string; action: string; detail: string }>;
   // every call made without asking a human, logged as it happens (runs/<KEY>/decisions.md)
   // note: true for routine entries (branching, answers a human gave) that never reach the MR
-  decisions?: Array<{ at: string; where: string; decision: string; why: string; note?: boolean }>;
+  decisions?: Array<{ at: string; where: string; decision: string; why: string; note?: boolean; call?: Call }>;
   // significant differences from the ticket or spec (handoff, then feedback rounds)
   changes?: Array<{ kind: string; what: string; why: string }>;
   // protected files this run may edit (from --allow-edit)

@@ -53,19 +53,45 @@ Make the calls a good backend developer on this team would make. No source autom
 
 What is merged and running usually beats what is written: documents go stale. If the techspec names a field one way and the merged model another, follow the model and say so. In the other direction, if the ticket clearly asks for new behaviour, build it, even if nothing does it yet.
 
-**Grill yourself before you plan.** Settle each from the evidence:
+**First, recon.** Find out everything the sources can settle: the ticket, the spec, the contract, the code, the schema and the dev data. Each thing they settle goes into the plan's `facts`, with its source (a file and line, a ticket line, a spec page, or the query you ran and what it showed). Facts are not decisions; they never go to the grill.
+
+**Then grill yourself on what recon couldn't settle.** This is the team's `/grill-me` skill, word for word:
+
+> Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+>
+> Ask the questions one at a time.
+>
+> If a question can be answered by exploring the codebase, explore the codebase instead.
+
+Nobody is here to answer, so you run it on yourself: you are both the interviewer and the developer, and "this plan" is your plan for this ticket. Follow it exactly. Interview relentlessly, about every aspect, until nothing is left open. Start from the ticket's top-level decisions and walk down each branch, resolving the decisions that depend on each answer before moving on. Ask one question at a time and settle it before asking the next. If a question turns out to be answerable from the sources, it was recon: go and look, and put the answer in `facts` instead. Only ask what is genuinely open: the sources are silent, they conflict, or there are several valid ways to build it. Between recon and the grill, make sure every one of these is covered:
 - the consumer, and the exact shape it expects;
-- every error and edge case: missing or bad input, not found, empty results, boundaries;
+- every error and edge case: missing or bad input, not found, empty results, boundaries, and the order the checks run;
 - concurrent requests and re-runs;
 - whether anything is a breaking change for an existing consumer;
 - whether each write must be transactional or idempotent;
 - whether the schema changes at all (say "no migration" explicitly for read-only tickets);
 - scope edges.
 
-Each answer goes one of three ways:
-- **Settled by the sources with no clash:** just do it. Don't log it.
-- **You chose, because nothing settled it, or you went against the ticket, spec or contract:** record it in `calls`, with what you chose and the evidence. These go in the MR for a human to check. Following an existing pattern or leaving out something the ticket doesn't ask for is not a call.
-- **An extreme blocker:** raise a question. This is rare. Only when the evidence is genuinely split after searching the ticket, spec, code and connected tickets; a wrong guess would be costly or hard to undo (wrong data saved, a broken contract, an unwritten business rule); and no reasonable default exists. If you'd go ahead anyway with your recommendation, it's a call.
+**Record every grill question as one entry in `calls`**, in the order you walked the tree:
+- `question`: the decision, as a question;
+- `options`: every realistic option, each one short and concrete;
+- `recommended`: the option you recommend from the evidence;
+- `chosen`: what you went with;
+- `why`: the evidence you weighed and why the other options lost. If `chosen` differs from `recommended`, say what changed your mind.
+
+An example from a different ticket, for the format only:
+
+```
+question:    How do we stop two edits of the same config from overlapping periods?
+options:     ["check for overlap in the service only", "service check, plus the existing exclusion constraint", "lock the row with SELECT … FOR UPDATE"]
+recommended: service check, plus the existing exclusion constraint
+chosen:      service check, plus the existing exclusion constraint
+why:         The service check returns the spec's AGEING_CONFIG_PERIOD_OVERLAP; the constraint (20261007100001-…js) catches the race the check can't. A row lock is used by no sibling endpoint.
+```
+
+The orchestrator writes these into `decisions.md` and into the plan as "Decisions taken during the grill phase", and the important ones go into the MR. So don't repeat them in `plan_markdown`. Going against the ticket, spec or contract on purpose is always a grill decision. Following an existing pattern, reusing what exists, or leaving out what the ticket doesn't ask for is not.
+
+**A real blocker becomes a question instead.** This is rare. Only when the evidence is genuinely split after searching the ticket, spec, code and connected tickets; a wrong guess would be costly or hard to undo (wrong data saved, a broken contract, an unwritten business rule); and no reasonable default exists. If you'd go ahead anyway with your recommendation, it's a grill decision, not a question.
 
 Questions route by audience: `pm` for product, `tech_lead` for architecture, data and contracts, `developer` for things only the local developer knows. Every question needs your recommended answer.
 

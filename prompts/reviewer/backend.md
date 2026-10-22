@@ -71,6 +71,7 @@ Verify claims in the code yourself. Never trust the Dev Agent's summary of what 
    - WS1 route only: target endpoint, headers forwarded, errors passed through, sibling route;
    - bug fix: reproduction, root cause by file and line, smallest fix, regression test.
    Check the type is right for what the ticket really does, every required section is there, and each one is correct against the code (verify it yourself). A missing or wrong section is a `required` finding.
+   Then review the grill as the lead would. The plan's `facts` must really be settled by their sources. The `calls` ("Decisions taken during the grill phase") are every decision recon left open, each with its options, recommendation, choice and why. Missing branches, missing options, a choice that doesn't hold up against the options it rejected, or a fact that's really an open decision is a `required` finding that names the decision.
 
 9. **Backend checks** (every review):
    - **SQL injection:** raw `sequelize.query` with interpolated input, instead of `replacements` or `bind`.

@@ -48,6 +48,7 @@ export function figmaLinks(text: string): string[] {
 
 export async function buildInputs(opts: {
   dir: string;
+  key: string;
   ticketText: string;
   issue?: JiraIssue;
   jira?: Jira;
@@ -56,7 +57,7 @@ export async function buildInputs(opts: {
 }): Promise<Inputs> {
   const dir = ensureDir(opts.dir);
   const specDir = ensureDir(path.join(dir, 'spec'));
-  const ticket = path.join(dir, 'ticket.md');
+  const ticket = path.join(dir, `Ticket-${opts.key}.md`);
   writeText(ticket, opts.ticketText);
 
   const specs: string[] = [];

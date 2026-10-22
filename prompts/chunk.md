@@ -17,7 +17,7 @@ Return:
 - the files you changed,
 - what you verified and how,
 - any deviation from the plan and why,
-- `calls`: any new judgement call you made while coding (same bar as the plan: nothing settled it, or you went against the ticket, spec or design). Usually empty,
+- `calls`: any new decision you made while coding that no source settled, or where you went against the ticket, spec or design, in the same shape as the plan's: `question`, `options`, `recommended`, `chosen`, `why`. Usually empty,
 - and `commit_summary`: a short imperative summary for the commit message (no ticket key, no prefix, under 70 characters, e.g. "add edit screen for overdue date config").
 
 `responses` is empty for this step.

@@ -7,6 +7,8 @@ A human is needed in only two places:
 - **When a decision can't be made from evidence.** For example, the ticket and the techspec disagree and no merged code shows which is current. The agent posts one consolidated question on the Jira card, mentions the right person (PM or tech lead), and continues when someone replies.
 - **Merging the MR.** That always stays human.
 
+How it works inside, and why it's built that way: [docs/how-it-works.md](docs/how-it-works.md).
+
 ## How a ticket flows
 
 ```text
@@ -17,8 +19,10 @@ agent run SCRUM-123
                test baseline: which tests already fail before we change anything
   plan         Dev Agent does recon and writes a chunked plan
                Reviewer Agent (a different model) challenges it; they go back and forth until agreement
-               the Dev Agent grills itself: it settles each choice from all the evidence and logs its
-               judgement calls for the MR; only extreme blockers go to a human
+               recon first: what the sources settle becomes facts with their source; then the Dev Agent
+               grills itself on what's still open and logs each decision (question, options, recommended,
+               chosen, why) in decisions.md; the few worth a second look go in the MR; only extreme
+               blockers go to a human
   chunks       for each chunk: Dev codes → orchestrator runs gates → Reviewer reviews the diff
                → Dev accepts/rejects each finding with evidence → … → one atomic commit
   final        full test suite + build vs baseline, whole-ticket audit, simplify pass, handoff

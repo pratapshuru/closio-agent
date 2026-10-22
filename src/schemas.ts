@@ -27,9 +27,12 @@ export const Question = z.object({
 });
 export type Question = z.infer<typeof Question>;
 
+// a decision recon left open, as the grill answered it
 export const Call = z.object({
-  choice: z.string(),
-  went_with: z.string(),
+  question: z.string(),
+  options: z.array(z.string()),
+  recommended: z.string(),
+  chosen: z.string(),
   why: z.string(),
 });
 export type Call = z.infer<typeof Call>;
@@ -66,7 +69,7 @@ export const Plan = z.object({
   summary: z.string(),
   repos: z.array(z.object({ key: z.string(), role_in_ticket: z.string() })),
   facts: z.array(z.object({ claim: z.string(), source: z.string() })),
-  // choices no source settled, or where I went against the ticket, spec or design; the MR asks for a second look at these
+  // every decision recon left open; all go to decisions.md, the important ones to the MR
   calls: z.array(Call),
   // needed from other tickets or the spec but missing there, or clashing; the lead is tagged on Jira
   gaps: z.array(Gap),

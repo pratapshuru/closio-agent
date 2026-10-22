@@ -52,6 +52,18 @@ export function humanCmd(cmd: string): string {
   return drop.reduce((c, flag) => c.replaceAll(flag, ''), cmd);
 }
 
+// a decision with all its options, as decisions.md and the plan show it
+function callLines(c: S.Call, indent = '  '): string {
+  const options = c.options.map((o, i) => `(${String.fromCharCode(97 + i)}) ${o.trim()}`);
+  return [
+    `**${c.question.trim()}**`,
+    `${indent}- Options: ${options.join('; ') || 'none listed'}`,
+    `${indent}- Recommended: ${c.recommended.trim()}`,
+    `${indent}- Chose: ${c.chosen.trim()}`,
+    `${indent}- Why: ${c.why.trim()}`,
+  ].join('\n');
+}
+
 const prompt = (name: string) => fs.readFileSync(path.join(TOOL_ROOT, 'prompts', `${name}.md`), 'utf8');
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 
@@ -233,7 +245,7 @@ export class Run {
   }
 
   // the team's own notes for a repo, if it has any; our safety rules still win
-  // what a session still needs: the FE and/or BE base prompt for the sides this ticket touches, then each repo's own notes
+  // base prompts for the sides not sent yet, then repos whose notes weren't sent
   private unsent(seen: string[]): string[] {
     const repos = Object.keys(this.state.repos);
     const sides = [...new Set(repos.map((k) => (this.repoCfg(k).kind === 'frontend' ? 'side:frontend' : 'side:backend')))];
@@ -279,7 +291,7 @@ export class Run {
     // a bug ticket's first dev and reviewer calls start from copies of its story's conversations
     const pr = this.state.parentRun;
     const forkFrom = resume || !pr ? undefined : role === 'dev' ? pr.devFork : role === 'reviewer' ? pr.reviewerFork : undefined;
-    // each session gets the FE/BE rules and a repo's own CLAUDE.md/AGENTS.md once, the first time it works on that side or repo
+    // each session gets its FE/BE base and each repo's CLAUDE.md once
     const sent = (this.state.conventionsSent ??= {});
     const keyed = role === 'dev' || role === 'reviewer' ? role : null;
     const seen = keyed && resume ? (sent[keyed] ?? []) : [];
@@ -407,7 +419,7 @@ export class Run {
       : 'This ticket has no frontend work, so set `design_status` to `not_needed`.';
   }
 
-  // the FE/BE base prompt itself reaches each session once, ahead of the step (see conventions); steps only add the decisions so far
+  // the base prompt goes out once through conventions(); steps only add the decisions so far
   private devRules(): string {
     return this.decisions();
   }
@@ -443,7 +455,10 @@ export class Run {
 
   private savePlan(plan: S.Plan): void {
     this.state.plan = plan;
-    writeText(this.file('plan.md'), plan.plan_markdown);
+    // same entries as decisions.md, so the two can't disagree
+    const grill = plan.calls.map((c, i) => `${i + 1}. ${callLines(c, '   ')}`).join('\n\n') || 'None: recon settled everything.';
+    const asked = plan.questions.map((q) => `- **For ${q.audience}:** ${q.question} (recommended: ${q.recommendation})`).join('\n');
+    writeText(this.file('plan.md'), `${plan.plan_markdown.trim()}\n\n## Decisions taken during the grill phase\n\n${grill}\n${asked ? `\n## Blockers sent to a person\n\n${asked}\n` : ''}`);
     writeJson(this.file('plan.json'), plan);
     this.save();
   }
@@ -676,7 +691,7 @@ export class Run {
     this.state.issueType = issue?.type ?? (/type:\s*bug/i.test(ticketText) ? 'Bug' : undefined);
     this.state.reporterId = issue?.reporterId;
     if (!opts.fresh && (opts.parent || /bug/i.test(this.state.issueType ?? ''))) this.findParentRun(opts.parent, issue?.epic, issue?.links ?? [], ticketText);
-    const inputs = await buildInputs({ dir: this.file('inputs'), ticketText, issue, jira: issue ? this.jira : undefined, specs: opts.specs, contexts: opts.contexts });
+    const inputs = await buildInputs({ dir: this.file('inputs'), key: this.state.key, ticketText, issue, jira: issue ? this.jira : undefined, specs: opts.specs, contexts: opts.contexts });
     this.state.inputs = { ticket: inputs.ticket, specs: inputs.specs, context: inputs.context, figma: path.join(inputs.dir, 'figma.md'), images: inputs.images };
 
     // a bug ticket moves only once it's confirmed; a "not a bug" leaves the card as QA left it
@@ -856,26 +871,25 @@ export class Run {
     if (design.mode === 'unavailable') await this.waitForDesign();
   }
 
-  // logs a call made without asking a human; the MR's "Worth a second look" is written from the non-note ones
-  private decide(where: string, decision: string, why: string, note = false): void {
+  // decisions.md; the handoff picks the MR's "worth a second look" from the non-note entries
+  private decide(where: string, decision: string, why: string, note = false, call?: S.Call): void {
     const list = (this.state.decisions ??= []);
     if (list.some((d) => d.decision === decision)) return;
-    list.push({ at: now(), where, decision, why, note });
+    list.push({ at: now(), where, decision, why, note, call });
     writeText(this.file('decisions.md'), `# Decisions for ${this.state.key}\n\n${this.decisionLines(false) || '- none'}\n\n## Other notes\n\n${this.decisionLines(true) || '- none'}`);
   }
 
   private decisionLines(note: boolean): string {
     return (this.state.decisions ?? [])
       .filter((d) => Boolean(d.note) === note)
-      .map((d) => `- **[${d.where}]** ${d.decision}${d.why ? `\n  Why: ${d.why}` : ''}`)
+      .map((d) => (d.call ? `- **[${d.where}]** ${callLines(d.call)}` : `- **[${d.where}]** ${d.decision}${d.why ? `\n  Why: ${d.why}` : ''}`))
       .join('\n');
   }
 
   // what a dev would raise with the lead before building; the run keeps going on the stated assumption
   private async postGaps(gaps: S.Gap[]): Promise<void> {
     for (const g of gaps) this.decide('gap', `${g.what} Going ahead assuming: ${g.assumption}`, g.alternative ? `fallback: ${g.alternative}` : 'raised with the lead');
-    // older runs stored a plain yes/no here
-    const already = new Set(Array.isArray(this.state.gapsPosted) ? this.state.gapsPosted : []);
+    const already = new Set(this.state.gapsPosted ?? []);
     gaps = gaps.filter((g) => !already.has(g.what.trim()));
     if (!gaps.length || !this.state.jira) return;
     const ids = await this.mentions();
@@ -901,7 +915,7 @@ export class Run {
   }
 
   private logCalls(where: string, calls: S.Call[]): void {
-    for (const c of calls) this.decide(where, `${c.choice} Went with: ${c.went_with}`, c.why);
+    for (const c of calls) this.decide(where, `${c.question} Chose: ${c.chosen}`, c.why, false, c);
   }
 
   // the dev agent pushed back on reviewer findings; those are decisions too
@@ -1631,9 +1645,7 @@ export class Run {
       companions.length ? `**Goes with**\n${bullets(companions)}` : '',
       this.state.jira ? `Jira: ${this.config.jira.base_url}/browse/${this.state.key}` : '',
     ];
-    // older handoffs wrote the guide as one text block
-    const legacyGuide = (h as { review_guide_md?: string }).review_guide_md ?? '';
-    const guide = h.review_guide?.length ? bullets(h.review_guide.map((g) => `\`${g.file}\`: ${g.what.trim()}`)) : legacyGuide.trim();
+    const guide = bullets(h.review_guide.map((g) => `\`${g.file}\`: ${g.what.trim()}`));
     const details = [
       `**Tested:** ${h.testing_md.trim()}`,
       fs.existsSync(gateFile) ? `**Checks run by the pipeline**\n${gateReport(readJson(gateFile))}` : '',

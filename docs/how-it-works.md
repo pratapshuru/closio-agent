@@ -1,8 +1,6 @@
-# closio-agent: what we built, how it works, and why
+# How closio-agent works, and why
 
-A complete description of the closio-agent pipeline, for the development team. It covers every part of the system, from the core design down to small additions like VPN auto-connect, with the reasoning behind each choice.
-
-**Audience:** developers on the Closio squad (FE: Vue 3; BE: Node.js WS1 gateway + WS2 services). They know Jira, GitLab, our repos and our workflow. They don't know this tool yet.
+Every part of the pipeline, from the core design down to small additions like VPN auto-connect, with the reasoning behind each choice. For setup and daily use, start with the [README](../README.md); read this when you want to understand or change how it works.
 
 ---
 
@@ -311,9 +309,9 @@ flowchart LR
 ```
 
 - **Recon:** code in FE and BE, merged code, the other side of the API, spec sections, connected tickets, and dev data via read-only queries (7.9).
-- **Self-grill:** every choice (components, states, errors, formats, the API contract, scope) is settled from evidence. Each open choice ends up as one of:
-  - **settled by evidence:** just done, not logged;
-  - **its own call:** recorded and shown in the MR as "Worth a second look" (for example "kept the repo's outlined button instead of Figma's filled one");
+- **Facts:** whatever the sources settle goes into the plan's facts, each with its source. These are never grilled.
+- **Self-grill:** the team's `/grill-me` skill, run by the bot on itself, only on what recon left open (sources silent, conflicting, or several valid ways). Each open choice ends up as one of:
+  - **a decision:** saved with the question, every option, the recommended one, what was chosen and why. All of them go to `decisions.md` and into the plan under "Decisions taken during the grill phase"; the few worth a second look go into the MR (for example "kept the repo's outlined button instead of Figma's filled one");
   - **a gap** (needed from another ticket or the spec and missing, or clashing): posted on Jira tagging the lead, on both tickets; work continues on a stated assumption;
   - **an extreme blocker:** a question to the right person (PM for product, tech lead for contracts and architecture, the developer for local things), with the bot's recommendation.
 - **The plan** lists chunks in order (WS2, then WS1, then FE, then tests), what to reuse, the closest files to mirror, risks, upcoming tickets to build for, and a done checklist.
@@ -366,7 +364,7 @@ flowchart TD
 **MR description**, written in a developer's voice. Visible part (each section hidden when empty):
 - what and why;
 - **Different from the ticket** (for QA and the PM);
-- **Worth a second look** (only real calls);
+- **Worth a second look** (at most five decisions from `decisions.md` a teammate should check);
 - **Where the reviewer and I disagreed**;
 - **Heads up** (real risks and impact);
 - **To test**;
@@ -795,7 +793,7 @@ agent replay REPLAY-550 --repo ws2targetsales --base 60afea5 --reference b57cb4c
 | **Baseline** | Which tests already failed before the ticket's changes |
 | **Worktree** | A separate checkout of a repo for one ticket, so your own checkout is untouched |
 | **Stacked branch** | A ticket's branch built on another ticket's unmerged branch |
-| **Call** | A choice the bot made itself, listed in the MR as "Worth a second look" |
+| **Decision (call)** | A choice recon left open and the bot settled itself, saved with its options, recommendation, choice and why in `decisions.md`; the most important appear in the MR as "Worth a second look" |
 | **Gap** | Something this ticket needs from another ticket or the spec that's missing or clashing |
 | **Change** | Something built differently from the ticket or spec |
 | **Impact check** | Which other tickets, uncovered work or spec sections a ticket's gaps and changes affect |
