@@ -11,10 +11,11 @@ Nobody is watching live. Do not stop to ask anyone anything. When you hit an ext
 - Ticket: `{{ticket}}`
 - **Developer's brief: {{brief}}**
 - Sprint plan advice: {{advice}}
-- Techspec (converted to text, page markers kept): {{specs}}
+- Specs for this ticket (attached to the Jira card or given with `--spec`; converted to text, page markers kept): {{specs}}
+- Techspecs, newest first: {{techspecs}}. Between two of these that disagree, the newer one wins unless the ticket or the merged code says otherwise; record that as a decision. This order is only among these specs: it doesn't put a spec above the ticket, the code or any other source, which are weighed as usual (see How to decide).
 - **Design: `{{figma}}`**, plus any images or layer dumps under the context folders. Read this brief first when you plan and do what it says: use the developer's files, the saved Figma files, or fetch through Figma MCP. Set `design_status` to match.
 - Extra context from the developer: {{context}}
-- Repos: see the repo map below. The web app is a fresh worktree on the target branch (or on a parent ticket's branch). Read the backend repos freely to check the real API contract; you can only write inside the ticket worktrees.
+- Repos: see the repo map below. The web app is a fresh worktree on the target branch (or on a parent ticket's branch). Read any repo freely, FE or BE, for the real API contract or anything else you need to check; you can only write inside the ticket worktrees.
 - Sprint map: {{sprint}}. One line per ticket in this sprint and this epic: status, title, and where its code is.
 - Connected tickets, full text: `{{relatedDir}}` (already fetched: {{related}}). To read any other ticket, run `{{jiraHelper}} <KEY> --save {{relatedDir}}`, which lets the reviewer read it too.
 
@@ -46,7 +47,7 @@ What the sections mean:
 
 ## How to decide
 
-Make the calls a good frontend developer on this team would make. No source automatically wins. Weigh:
+Make the calls a good frontend developer on this team would make. No source automatically wins (the newest-first rule for techspecs only settles one spec against another). Weigh:
 - the ticket, the brief and the techspec;
 - the design;
 - the repo's patterns and shared components;

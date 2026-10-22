@@ -73,7 +73,7 @@ export type RunState = {
   resumePhase?: Phase;
   options?: unknown;
   autoAnswer?: boolean;
-  inputs?: { ticket: string; specs: string[]; context: string[]; figma: string; images: string[]; brief?: string; advice?: string };
+  inputs?: { ticket: string; specs: string[]; techspecs?: string[]; context: string[]; figma: string; images: string[]; brief?: string; advice?: string };
   retries?: number;
   design?: Design;
   designSkipped?: boolean;

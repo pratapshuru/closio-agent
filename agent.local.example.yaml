@@ -7,6 +7,10 @@ repos:
   ws2pricingengine: { path: ~/nodejs-ws2pricingengine }
   ws2closio:        { path: ~/nodejs-ws2closio }
 
+# Your techspec files, newest first. Every run gets all of them; add a new one at the top when it arrives.
+# techspecs:
+#   - ~/Downloads/Tech Spec - Incentive (Business 2).pdf
+
 # people:
 #   tech_lead: { name: Your Lead, email: lead@company.com, gitlab_username: lead.name }
 #   pm:        { name: Your PM, email: pm@company.com }

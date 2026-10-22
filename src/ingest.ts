@@ -6,7 +6,10 @@ import { ensureDir, exec, writeText } from './util.ts';
 export type Inputs = {
   dir: string;
   ticket: string;
+  // specs for this ticket: given with --spec or attached to the card
   specs: string[];
+  // the developer's techspecs list, newest first
+  techspecs: string[];
   context: string[];
   figma: string[];
   images: string[];
@@ -17,9 +20,11 @@ async function pdfToText(pdf: string, out: string): Promise<void> {
   if (res.code !== 0) throw new Error(`pdftotext failed on ${pdf}: ${res.stderr}. Install with: brew install poppler`);
 }
 
+// the run's own text copy of a spec; a second file with the same name gets -2, -3…
 async function addSpec(file: string, dir: string): Promise<string> {
-  const name = path.basename(file).replace(/\.[^.]+$/, '');
-  const out = path.join(dir, `${name}.txt`);
+  const stem = path.basename(file).replace(/\.[^.]+$/, '');
+  let out = path.join(dir, `${stem}.txt`);
+  for (let n = 2; fs.existsSync(out); n++) out = path.join(dir, `${stem}-${n}.txt`);
   if (file.toLowerCase().endsWith('.pdf')) await pdfToText(file, out);
   else fs.copyFileSync(file, out);
   return out;
@@ -53,6 +58,7 @@ export async function buildInputs(opts: {
   issue?: JiraIssue;
   jira?: Jira;
   specs: string[];
+  techspecs: string[];
   contexts: string[];
 }): Promise<Inputs> {
   const dir = ensureDir(opts.dir);
@@ -67,9 +73,10 @@ export async function buildInputs(opts: {
   for (const att of opts.issue?.attachments ?? []) {
     if (!opts.jira) continue;
     if (/\.(pdf|md|txt)$/i.test(att.filename)) {
-      const raw = path.join(specDir, att.filename);
+      // the original goes aside; the spec folder only holds the uniquely named text copies
+      const raw = path.join(ensureDir(path.join(dir, 'attachments')), att.filename);
       fs.writeFileSync(raw, await opts.jira.attachment(att.url));
-      specs.push(raw.toLowerCase().endsWith('.pdf') ? await addSpec(raw, specDir) : raw);
+      specs.push(await addSpec(raw, specDir));
     } else if (/\.(png|jpe?g|gif|webp)$/i.test(att.filename)) {
       const file = path.join(ensureDir(path.join(dir, 'attachments')), att.filename);
       fs.writeFileSync(file, await opts.jira.attachment(att.url));
@@ -89,7 +96,10 @@ export async function buildInputs(opts: {
     context.push(abs);
   }
 
+  const techspecs: string[] = [];
+  for (const file of opts.techspecs) techspecs.push(await addSpec(file, specDir));
+
   // the design brief (figma.md) is written by prepareDesign at planning time
   const figma = figmaLinks(opts.ticketText);
-  return { dir, ticket, specs, context, figma, images };
+  return { dir, ticket, specs, techspecs, context, figma, images };
 }

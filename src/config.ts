@@ -74,7 +74,6 @@ const ConfigSchema = z.object({
       // while a merged card is in one of these, QA-Question comments still get answered
       testing: z.array(z.string()).default(['Ready For Test', 'In Testing']),
     }),
-    techspec_dir: z.string().optional(),
     // the board's project, used by `agent sprint-plan` to find the open sprint
     project: z.string().default('SCRUM'),
   }),
@@ -127,6 +126,8 @@ const ConfigSchema = z.object({
       connect_timeout_sec: z.number().default(90),
     })
     .optional(),
+  // your techspec files (PDF or text), newest first; every run gets all of them
+  techspecs: z.array(z.string()).default([]),
   workspace: z.object({
     runs_dir: z.string().default('runs'),
     sprints_dir: z.string().default('sprints'),

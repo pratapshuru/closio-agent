@@ -476,6 +476,7 @@ export class Run {
       key: this.state.key,
       ticket: inputs.ticket,
       specs: list(inputs.specs),
+      techspecs: list(inputs.techspecs ?? []),
       figma: inputs.figma,
       context: list(inputs.context),
       repoMap: this.repoMap(),
@@ -825,8 +826,10 @@ export class Run {
     this.state.issueType = issue?.type ?? (/type:\s*bug/i.test(ticketText) ? 'Bug' : undefined);
     this.state.reporterId = issue?.reporterId;
     if (!opts.fresh && (opts.parent || /bug/i.test(this.state.issueType ?? ''))) this.findParentRun(opts.parent, issue?.epic, issue?.links ?? [], ticketText);
-    const inputs = await buildInputs({ dir: this.file('inputs'), key: this.state.key, ticketText, issue, jira: issue ? this.jira : undefined, specs: opts.specs, contexts: opts.contexts });
-    this.state.inputs = { ticket: inputs.ticket, specs: inputs.specs, context: inputs.context, figma: path.join(inputs.dir, 'figma.md'), images: inputs.images };
+    // your techspecs list, newest first; specs for this ticket (--spec, card attachments) are kept apart
+    const listed = this.config.techspecs.map((p) => resolvePath(p)).filter((p) => fs.existsSync(p) || (log(`  techspec not found, skipped: ${p}`), false));
+    const inputs = await buildInputs({ dir: this.file('inputs'), key: this.state.key, ticketText, issue, jira: issue ? this.jira : undefined, specs: opts.specs, techspecs: listed.filter((p) => !opts.specs.includes(p)), contexts: opts.contexts });
+    this.state.inputs = { ticket: inputs.ticket, specs: inputs.specs, techspecs: inputs.techspecs, context: inputs.context, figma: path.join(inputs.dir, 'figma.md'), images: inputs.images };
 
     // a bug ticket moves only once it's confirmed; a "not a bug" leaves the card as QA left it
     if (this.state.jira && !this.state.parentRun) await this.startOnJira();

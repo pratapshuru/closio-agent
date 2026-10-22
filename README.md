@@ -13,7 +13,7 @@ How it works inside, and why it's built that way: [docs/how-it-works.md](docs/ho
 
 ```text
 agent run SCRUM-123
-  intake       Jira ticket + attachments + techspec PDF → runs/SCRUM-123/inputs/
+  intake       Jira ticket + attachments + your techspecs → runs/SCRUM-123/1-input/
                Jira → In Development
                fresh git worktree per repo on the target branch (your checkout is never touched)
                test baseline: which tests already fail before we change anything
@@ -74,7 +74,7 @@ Then run `agent doctor`. You need `claude` and `codex` logged in, `brew install 
 ## Everyday use
 
 ```bash
-agent run SCRUM-560 --spec ~/Downloads/techspec.pdf     # start (or continue) a ticket
+agent run SCRUM-560                                     # start (or continue) a ticket
 agent run SCRUM-560 --context ~/closio-web-v2/.claude/560   # add screenshots, CSS dumps, notes
 agent status                                            # all runs at a glance
 agent status SCRUM-560                                  # plan, commits, MRs
@@ -90,6 +90,16 @@ agent align SCRUM-561                                   # check against connecte
 agent sprint SCRUM-561                                  # refresh and show this sprint's map
 agent run SCRUM-561 --base SCRUM-560                    # force building on another ticket's branch (--base develop for none)
 ```
+
+**Techspecs:** list your spec files once in `agent.local.yaml`, newest first, and every run gets all of them as searchable text:
+
+```yaml
+techspecs:
+  - ~/Downloads/Tech Spec - Incentive (Business 2).pdf
+  - ~/Downloads/Tech Spec - Target Sales.pdf
+```
+
+When a new spec arrives, add its path at the top. Specs are gathered once, when a run collects its inputs at the start, so runs started after that get it; a run already past that step keeps the specs it started with. A path that no longer exists is skipped with a warning. Each run converts its specs into its own `1-input/spec/` folder. When two specs on the list disagree, the newer one wins unless the ticket or the merged code says otherwise, and that's logged as a decision; this order is only between specs on the list, never over the ticket, the code or other sources. Specs attached to the Jira card, or given with `--spec file.pdf` when you start a run, are passed separately as the ticket's own specs (`--spec` on a run that's already going is ignored).
 
 While a bot works, one line under the current step shows how long it has been running and what it is doing right now (reading a file, running tests, thinking, writing its answer). To read a bot's whole conversation, `agent session <KEY>` prints a command that opens a safe copy of it.
 

@@ -11,7 +11,8 @@ You did not write this work and you owe it nothing. You are read-only. Do not ed
 - Ticket: `{{ticket}}`
 - Developer's brief: {{brief}}. When present, also review against it: its reuse instructions, scope boundaries, risks and what done means.
 - Sprint plan advice: {{advice}}. When present, check the work against it: collisions with other tickets touching the same code, what should be built for reuse by later tickets, dependencies and FE/BE contracts, and known issues with this ticket.
-- Techspec text: {{specs}}
+- Specs for this ticket (attached to the Jira card or given with `--spec`): {{specs}}
+- Techspecs, newest first: {{techspecs}}. Between two of these that disagree, the newer one should win unless the ticket or the merged code says otherwise, and the dev records that as a decision. This order is only among these specs, not over the ticket, the code or any other source. Specs run 90 to 120 pages: search them (`grep -n`) for what you're checking and read those sections, not the whole file.
 - API contract and extra context (swagger notes, sample payloads): {{context}}
 - Plan: `{{planFile}}`
 - Sprint map: {{sprint}}; connected tickets (full text): `{{relatedDir}}`. Connected tickets built by the pipeline end with a handoff note (what they built for reuse and where, their contract). Check the work reuses and follows it; ignoring one counts like any other missed reuse.

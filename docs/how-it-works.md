@@ -246,7 +246,7 @@ The base prompt depends on the ticket. A backend ticket gets `prompts/dev/backen
 
 ### 6.2 What the rules say (how a bot decides)
 
-- **No source wins automatically.** Weigh the ticket, brief, techspec, Figma, FE and BE code, merged code and connected tickets, like a developer would.
+- **No source wins automatically.** Weigh the ticket, brief, techspec, Figma, FE and BE code, merged code and connected tickets, like a developer would. The one fixed order is between techspecs on your list: the newer spec wins over an older one, unless the ticket or merged code says otherwise. That order never puts a spec above any other source.
 - **What is merged and running usually beats what is written.** Documents go stale; tickets and designs are often drafted with AI and miss house patterns.
 - **Consistent repo patterns beat Figma** for buttons, toasts, dialogs and error styles. The choice is listed in the MR.
 - **Grill yourself before planning:** walk every choice the ticket needs and settle it from evidence.
@@ -275,7 +275,7 @@ If a repo has a `CLAUDE.md`, `.claude/CLAUDE.md` or `AGENTS.md` (WS1 has one, ab
 ### 7.1 Intake
 
 - **Ticket:** fetched from Jira REST v3. Jira's rich text (ADF) is converted to Markdown; stray tags are stripped.
-- **Techspec:** a PDF given with `--spec` is converted to text with `pdftotext`, keeping page markers. The bot is told to search it by section, not read 100 pages.
+- **Techspec:** every spec listed under `techspecs:` in your `agent.local.yaml` (newest first) is converted to text with `pdftotext`, keeping page markers, into the run's own `1-input/spec/` folder. Specs attached to the Jira card or given with `--spec` are passed separately, as the ticket's own specs. The bot is told to search them by section, not read 100 pages, and that between two specs on the list the newer one wins (logged as a decision), which never puts a spec above the ticket, the code or other sources.
 - **Your brief:** picked up automatically from `runs/KEY/1-input/brief.md`, or from your existing `.claude/<number>/*prompt*.md` folders in the FE repo.
 - **Sprint advice:** if `agent sprint-plan` was run, this ticket's part of that report.
 - **Design:** see 7.2.

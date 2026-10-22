@@ -75,6 +75,7 @@ export function testConfig(root: string, repo: string): Config {
     },
     limits: { review_rounds: 3, gate_fix_attempts: 2, agent_timeout_min: 1, feedback_rounds: 2, grill_rounds: 3 },
     design: { legacy_folders: false, legacy_number_projects: ['SCRUM'] },
+    techspecs: [],
     workspace: { runs_dir: path.join(root, 'runs'), sprints_dir: path.join(root, 'sprints') },
   };
 }

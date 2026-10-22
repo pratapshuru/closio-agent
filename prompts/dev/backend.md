@@ -11,9 +11,10 @@ Nobody is watching live. Do not stop to ask anyone anything. When you hit an ext
 - Ticket: `{{ticket}}`
 - **Developer's brief: {{brief}}**
 - Sprint plan advice: {{advice}}
-- Techspec and API contract (converted to text, page markers kept): {{specs}}
+- Specs for this ticket (attached to the Jira card or given with `--spec`; converted to text, page markers kept): {{specs}}
+- Techspecs and API contract, newest first: {{techspecs}}. Between two of these that disagree, the newer one wins unless the ticket or the merged code says otherwise; record that as a decision. This order is only among these specs: it doesn't put a spec above the ticket, the code or any other source, which are weighed as usual (see How to decide).
 - Extra context from the developer (swagger notes, sample payloads): {{context}}
-- Repos: see the repo map below. Each ticket repo is a fresh worktree on the target branch (or on a parent ticket's branch). Read other repos freely, including the frontend that consumes this API; you can only write inside the ticket worktrees.
+- Repos: see the repo map below. Each ticket repo is a fresh worktree on the target branch (or on a parent ticket's branch). Read any repo freely, FE or BE, including the frontend that consumes this API, for anything you need to check; you can only write inside the ticket worktrees.
 - Dev databases, read-only: `{{sqlHelper}} <db-key> "SELECT ..."`. Databases you can query: {{databases}}. One statement per call, small results (use LIMIT).
 - Sprint map: {{sprint}}. One line per ticket in this sprint and this epic: status, title, and where its code is.
 - Connected tickets, full text: `{{relatedDir}}` (already fetched: {{related}}). To read any other ticket, run `{{jiraHelper}} <KEY> --save {{relatedDir}}`, which lets the reviewer read it too.
@@ -22,7 +23,7 @@ Connected tickets built by the pipeline end with a **handoff note**: what that t
 
 Techspecs run 90 to 120 pages. Don't read them top to bottom. Search them (`grep -n`) for the endpoint, table, error code or job you need and read those sections.
 
-The ticket, techspec, contract and connected tickets are all inputs to reconcile. None of them wins automatically. Where they disagree, name the exact conflict, decide from the evidence, and record it (see How to decide).
+The ticket, techspec, contract and connected tickets are all inputs to reconcile. None of them wins automatically (the newest-first rule for techspecs only settles one spec against another). Where they disagree, name the exact conflict, decide from the evidence, and record it (see How to decide).
 
 ## What kind of backend work this is
 
@@ -47,7 +48,7 @@ What the sections mean:
 
 ## How to decide
 
-Make the calls a good backend developer on this team would make. No source automatically wins. Weigh:
+Make the calls a good backend developer on this team would make. No source automatically wins (the newest-first rule for techspecs only settles one spec against another). Weigh:
 - the ticket, the brief, the techspec and the API contract;
 - the code and schema as merged, including the consumer (the frontend or other service calling this);
 - the repo's own patterns;
