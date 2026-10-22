@@ -62,6 +62,8 @@ Options for run/replay:
   --no-publish                     stop before push/MR
   --auto-answer                    never wait on humans; take the agent's recommendation and log it
   --ask                            ask you every grill decision (options, recommendation) instead of letting the agent choose
+  --simulate                       trial run on a live ticket: read Jira but never write to it (see runs/<KEY>/would-post.md);
+                                   MRs are opened as drafts with no reviewers
 `;
 
 function parse(argv: string[]) {
@@ -78,6 +80,7 @@ function parse(argv: string[]) {
       'no-publish': { type: 'boolean' },
       'auto-answer': { type: 'boolean' },
       ask: { type: 'boolean' },
+      simulate: { type: 'boolean' },
       repo: { type: 'string' },
       base: { type: 'string' },
       reference: { type: 'string' },
@@ -105,6 +108,7 @@ function startOptions(key: string, v: ReturnType<typeof parse>['values'], replay
     jira: !v['ticket-file'],
     autoAnswer: Boolean(v['auto-answer']) || Boolean(replay),
     ask: Boolean(v.ask) && !v['auto-answer'] && !replay,
+    simulate: Boolean(v.simulate),
     replay,
     // for replays --base is the starting commit, handled separately
     base: !replay && v.base ? (/^[a-z]+-\d+$/i.test(v.base) ? v.base.toUpperCase() : v.base) : undefined,
@@ -244,6 +248,16 @@ async function main(argv: string[]): Promise<number> {
       const opts = startOptions(key, v);
       if (hasRun(config, key)) {
         const run = Run.load(config, key);
+        // before anything that could touch Jira, including the in-review check below
+        if (v.simulate && !run.state.simulate) {
+          // its branches already carry the real name, so it can't become a clean simulation now
+          if (Object.keys(run.state.repos).length) {
+            throw new Error(`${key} already has its branches, so it can't become a simulation now. To try it as one: \`agent clean ${key}\`, delete runs/${key}, then \`agent run ${key} --simulate\`.`);
+          }
+          run.state.simulate = true;
+          log('  simulating from now on: Jira is only read');
+          run.save();
+        }
         if (run.state.phase === 'in_review') {
           console.log(await run.sync());
           return 0;

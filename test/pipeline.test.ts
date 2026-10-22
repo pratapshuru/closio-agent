@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Run, type StartOptions } from '../src/pipeline.ts';
 import { clearFakes, registerFake } from '../src/providers.ts';
 import { PipelineStop } from '../src/util.ts';
-import { approved, handoff, plan, sandbox, sandboxWithRemote, sh, testConfig, work, wt } from './helpers.ts';
+import { approved, writeUp, plan, sandbox, sandboxWithRemote, sh, testConfig, work, wt } from './helpers.ts';
 
 function start(root: string, repo: string, base: string, extra: Partial<StartOptions> = {}, ticketText = '# T-1 - add a feature\n\nBackend: add feature.js') {
   const config = testConfig(root, repo);
@@ -36,7 +36,7 @@ function commonFakes() {
   registerFake('plan-review', () => approved);
   registerFake('audit', () => approved);
   registerFake('simplify', () => ({ suggestions: [] }));
-  registerFake('handoff', () => handoff);
+  registerFake('write-up', () => writeUp);
 }
 
 afterEach(() => {
@@ -91,7 +91,6 @@ describe('pipeline', () => {
     expect(prompts.plan).toContain(run.file('inputs', 'brief.md'));
     expect(prompts.review).toContain(run.file('inputs', 'brief.md'));
     expect(fs.readFileSync(path.join(root, 'runs', 'T-1', 'handoff-note.md'), 'utf8')).toContain('Built feature.js; reuse it.');
-    expect(fs.readFileSync(run.file('mr-svc.md'), 'utf8')).toContain('Notes for related tickets');
   });
 
   it('loops dev and reviewer until required findings are resolved, then commits once', async () => {
@@ -200,7 +199,7 @@ describe('pipeline', () => {
     await run.advance(opts);
     expect(run.state.phase).toBe('done');
     expect(run.state.disagreements).toHaveLength(1);
-    expect(fs.readFileSync(run.file('mr-svc.md'), 'utf8')).toContain('Where the reviewer and I disagreed');
+    expect(fs.readFileSync(run.file('mr-svc.md'), 'utf8')).toContain('Unresolved reviewer concern');
   });
 
   it('remembers intended gate failures until the tests chunk, then requires them fixed', async () => {
@@ -328,7 +327,7 @@ describe('pipeline', () => {
     await run.advance();
     expect(run.state.phase).toBe('done');
     expect(run.state.design?.mode).toBe('skipped');
-    expect(fs.readFileSync(run.file('mr-svc.md'), 'utf8')).toContain('built without Figma');
+    expect(fs.readFileSync(run.file('mr-svc.md'), 'utf8')).toContain('without the Figma design');
   });
 
   it('lets only the dev bot use Figma MCP, saving results for later steps', async () => {
@@ -418,7 +417,7 @@ describe('pipeline', () => {
       expect(r.branch).toBe('t-1');
       expect(r.parent?.ticket).toBe('SCRUM-560');
       expect(sh(r.worktree, 'git log --format=%s')).toBe('feat(T-1): add edit screen\nadd shared form\ninit');
-      expect(fs.readFileSync(run.file('mr-svc.md'), 'utf8')).toContain('Please review SCRUM-560 first');
+      expect(fs.readFileSync(run.file('mr-svc.md'), 'utf8')).toContain('**Depends on SCRUM-560:** review that one first.');
     });
 
     it('moves onto the parent when it changes, keeps every own commit, and tells the dev bot', async () => {

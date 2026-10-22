@@ -12,10 +12,10 @@ import { buildInputs, ticketMarkdown } from './ingest.ts';
 import { isOurComment, Jira } from './jira.ts';
 import { AgentError, claudeSessionFile, runAgent, type Access } from './providers.ts';
 import * as S from './schemas.ts';
-import { buildSprintContext, findBranches, mentionedKeys, relatedText, type TicketBranch } from './sprint.ts';
+import { buildSprintContext, findBranches, HANDOFF_HEADING, issueWithLatestComments, mentionedKeys, relatedText, type TicketBranch } from './sprint.ts';
 import { adviceFor } from './sprintplan.ts';
 import { isMergedInto, ownSubjects, resolveRef, startOn, startRestack, verifyRestack } from './stack.ts';
-import { hasRun, listRuns, loadState, runDir, saveState, scratchDir, totals, type Challenge, type GrillAnswer, type Phase, type RunState } from './state.ts';
+import { hasRun, loadState, realRunBranches, runDir, saveState, scratchDir, totals, type Challenge, type GrillAnswer, type Phase, type RunState } from './state.ts';
 import { ensureDir, exec, fill, log, now, PipelineStop, readJson, render, TOOL_ROOT, writeJson, writeText } from './util.ts';
 
 export type StartOptions = {
@@ -41,6 +41,8 @@ export type StartOptions = {
   fresh?: boolean;
   // ask the developer every grill decision instead of letting the dev agent choose
   ask?: boolean;
+  // a trial run on a live ticket: Jira is only read, MRs are drafts with no reviewers
+  simulate?: boolean;
 };
 
 // models sometimes echo a schema field name as an xml tag around or after the text
@@ -110,6 +112,13 @@ function readGrillAnswer(typed: string, c: S.Call, kind: GrillKind): GrillAnswer
   const i = /^[a-z]$/i.test(t) ? t.toLowerCase().charCodeAt(0) - 97 : -1;
   if (i >= 0 && i < c.options.length) return { chosen: c.options[i].trim(), by: 'you' };
   return { chosen: t, by: 'you' };
+}
+
+// a reviewer finding in one line: its title and the first sentence of why it matters
+function concern(f: S.Finding): string {
+  const why = f.detail.replace(/^\s*why this matters:\s*/i, '').split(/(?<=[.!?])\s|\n/)[0]?.trim() ?? '';
+  const sentence = why ? why[0].toUpperCase() + why.slice(1) : '';
+  return `${f.title.trim().replace(/\.$/, '')}.${sentence && why.toLowerCase() !== f.title.trim().toLowerCase() ? ` ${sentence.replace(/[^.!?]$/, '$&.')}` : ''}`;
 }
 
 // a decision with all its options, as decisions.md and the plan show it
@@ -190,6 +199,7 @@ export class Run {
       autoAnswer: opts.autoAnswer,
       baseOverride: opts.base,
       askGrill: Boolean(opts.ask) && !opts.autoAnswer,
+      simulate: Boolean(opts.simulate),
     };
     const run = new Run(config, state);
     ensureDir(run.dir);
@@ -223,7 +233,7 @@ export class Run {
       return rest.length >= 2 ? [this.stage(name), 'tests', ...rest] : ['.agent', 'gates', ...rest];
     }
     if (first === 'deployment.md' || first.startsWith('mr-')) return ['4-mr', first];
-    if (['logs', 'chunks', 'steps', 'score', 'plan.json', 'handoff.json'].includes(first)) return ['.agent', first, ...rest];
+    if (['logs', 'chunks', 'steps', 'score', 'plan.json', 'write-up.json'].includes(first)) return ['.agent', first, ...rest];
     return parts;
   }
 
@@ -245,7 +255,7 @@ export class Run {
     const repos = Object.values(s.repos).map((r) => `- ${r.key}: branch \`${r.branch}\`${r.mr ? `, MR ${r.mr.url}` : ''}`);
     const read = [
       [this.file('questions.md'), s.questions.pending.length ? 'waiting on these answers' : 'questions asked so far'],
-      [this.file('decisions.md'), 'every call made without asking, and why'],
+      [this.file('decisions.md'), 'what-to-build decisions, with their options and why'],
       [this.file('plan.md'), 'the plan'],
       [this.file('impact.md'), 'what this ticket affects elsewhere'],
       [this.file('handoff-note.md'), 'the note later tickets read'],
@@ -262,7 +272,7 @@ export class Run {
   }
 
   get jira(): Jira {
-    this.jiraClient ??= new Jira(this.config);
+    this.jiraClient ??= new Jira(this.config, this.state.simulate ? { wouldPost: this.file('would-post.md') } : {});
     return this.jiraClient;
   }
 
@@ -559,13 +569,24 @@ export class Run {
     return baseline;
   }
 
+  // scrum-516-simulated, or -2, -3… when an earlier simulation already left that branch
+  private async simulationBranch(source: string): Promise<string> {
+    const base = `${this.state.key.toLowerCase()}-simulated`;
+    for (let n = 1; ; n++) {
+      const name = n === 1 ? base : `${base}-${n}`;
+      const remote = await g.git(source, 'ls-remote', '--heads', 'origin', name).catch(() => '');
+      const local = await g.git(source, 'rev-parse', '--verify', '--quiet', `refs/heads/${name}`).then(() => true, () => false);
+      if (!remote.trim() && !local) return name;
+    }
+  }
+
   async ensureRepo(key: string): Promise<void> {
     if (this.state.repos[key]) return;
     const repo = this.repoCfg(key);
     const source = repoPath(this.config, key);
     const replay = this.state.replay;
-    // lowercase matches the team's own branch names (scrum-524)
-    const branch = replay ? `replay/${this.state.key}` : this.state.key.toLowerCase();
+    // lowercase matches the team's own branch names (scrum-524); a simulation gets its own, never a real dev's
+    const branch = replay ? `replay/${this.state.key}` : this.state.simulate ? await this.simulationBranch(source) : this.state.key.toLowerCase();
     const worktree = path.join(this.root, key);
     log(`preparing ${key} worktree`);
     const { base } = await g.ensureWorktree({
@@ -710,7 +731,21 @@ export class Run {
   }
 
   // one way to stop and wait for a person: questions.md, run state, a Jira comment, then a clean stop
-  private async pause(kind: 'answers' | 'design' | 'dependency' | 'grill', body: string, resumePhase: Phase, summary: string): Promise<never> {
+  private async pause(kind: 'answers' | 'design' | 'dependency' | 'grill', body: string, resumePhase: Phase, summary: string, askedAlready = false): Promise<never> {
+    // whoever is running the pipeline answers first, at the terminal; Jira is only the fallback
+    if ((kind === 'design' || kind === 'dependency') && !askedAlready) {
+      const typed = await this.askWaitInTerminal(kind, body);
+      if (typed) {
+        this.state.questions.inbox.push(`Developer (terminal): ${typed}`);
+        this.state.questions.askedAt = now();
+        this.state.waitingFor = kind;
+        this.state.resumePhase = resumePhase;
+        this.state.phase = 'awaiting_answers';
+        this.state.retries = 0;
+        this.save();
+        throw new RetryPhase();
+      }
+    }
     // grill questions are only asked at the terminal; everything else is written to questions.md
     if (kind !== 'grill') writeText(this.file('questions.md'), body);
     this.state.waitingFor = kind;
@@ -726,6 +761,33 @@ export class Run {
       this.save();
     }
     throw new PipelineStop('waiting', kind === 'grill' ? summary : `${summary} See ${this.file('questions.md')}`);
+  }
+
+  // the design and dependency waits, asked at the terminal; null means nobody's there, or "later" (then Jira)
+  private async askWaitInTerminal(kind: 'design' | 'dependency', body: string): Promise<string | null> {
+    if (!canPrompt()) return null;
+    const folder = designDropDir(this.config, this.state.key);
+    const hint = kind === 'design'
+      ? 'Enter = the files are in place · continue without design · later'
+      : `build on ${this.state.pendingDependency?.tickets[0] ?? '<KEY>'} · develop · later`;
+    process.stderr.write(`\n${body.replace(/\*\*/g, '')}\n`);
+    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+    try {
+      for (;;) {
+        const typed = (await rl.question(`Your answer [${hint}]: `)).trim();
+        if (/^later$/i.test(typed)) return null;
+        if (kind === 'design') {
+          if (typed) return typed;
+          if (findDesignFolders(this.config, this.state.key).length) return 'design files dropped';
+          process.stderr.write(`Nothing in ${folder} yet.\n`);
+          continue;
+        }
+        if (/^(develop|development)$/i.test(typed)) return 'continue from develop';
+        if (typed) return typed;
+      }
+    } finally {
+      rl.close();
+    }
   }
 
   // only an explicit go-ahead counts; "files coming tonight" is not one
@@ -792,7 +854,7 @@ export class Run {
       ticketText,
       relatedDir: this.file('inputs', 'related'),
       forcedRelated: [...(opts.related ?? []), ...(advice?.keys ?? []), ...(this.state.parentRun ? [this.state.parentRun.key] : [])],
-      ownRuns: listRuns(this.config).filter((r) => r.key !== this.state.key).map((r) => ({ key: r.key, branches: Object.fromEntries(Object.values(r.repos).map((x) => [x.key, x.branch])) })),
+      ownRuns: realRunBranches(this.config, this.state.key),
     });
     if (this.state.context.sprintFile) log(`  sprint map: ${this.state.context.sprintFile} (${this.state.context.related.length} connected ticket(s) fetched)`);
     const repos = opts.replay ? [opts.replay.repo] : opts.repos?.length ? opts.repos : this.inferRepos(ticketText, issue?.labels ?? []);
@@ -840,13 +902,13 @@ export class Run {
       }), S.TriageCheck, 'read');
       if (!c.agree) {
         real = true;
-        this.decide('bug', `Treated as a real bug: the reviewer disagreed with "${t.verdict.replaceAll('_', ' ')}"`, c.reason);
+        this.decide('bug', `Treated as a real bug: the reviewer disagreed with "${t.verdict.replaceAll('_', ' ')}"`, c.reason, true);
       }
     }
     this.state.bugTriage = { verdict: real ? 'bug' : t.verdict, cause: t.cause };
     if (real) {
       if (this.state.jira) await this.startOnJira();
-      this.decide('bug', `Confirmed a real bug in ${parent}`, t.cause);
+      this.decide('bug', `Confirmed a real bug in ${parent}`, t.cause, true);
       this.state.assumptions.push(`Bug confirmed in ${parent}: ${t.cause}`);
       log(`  confirmed: ${t.cause}`);
       this.save();
@@ -863,7 +925,7 @@ export class Run {
       const ids: Record<string, string> = this.state.reporterId ? { reporter: this.state.reporterId } : {};
       await this.jira.addComment(this.state.key, `${ids.reporter ? '@reporter ' : ''}${reply}`, ids);
     }
-    this.decide('bug', `Not a real bug (${t.verdict.replaceAll('_', ' ')}); replied on the card, no code changed`, t.cause);
+    this.decide('bug', `Not a real bug (${t.verdict.replaceAll('_', ' ')}); replied on the card, no code changed`, t.cause, true);
     this.state.phase = 'done';
     this.save();
     log(`  not a real bug (${t.verdict.replaceAll('_', ' ')}): ${t.cause}`);
@@ -893,7 +955,7 @@ export class Run {
     await this.pause('dependency', [
       `**${this.state.key} is a bug in ${parent}, which isn't merged yet.** Where should the fix go?`,
       `Reply "build on ${parent}" to put it on top of ${parent}'s branch, or "continue from develop" to start from develop. Then run \`agent run ${this.state.key}\`.`,
-    ].join('\n\n'), 'planning', `Waiting: ${parent} isn't merged yet.`);
+    ].join('\n\n'), 'planning', `Waiting: ${parent} isn't merged yet.`, true);
   }
 
   // a bug ticket in a story this laptop built: start from copies of that story's conversations
@@ -943,7 +1005,8 @@ export class Run {
     if (design.mode === 'unavailable') await this.waitForDesign();
   }
 
-  // decisions.md; the handoff picks the MR's "worth a second look" from the non-note entries
+  // decisions.md: what to build, settled without asking (grill decisions, gap assumptions, answers to blockers);
+  // note: true is a record of what happened (branching, rebases, bug triage, QA), kept apart
   private decide(where: string, decision: string, why: string, note = false, call?: S.Call, by?: 'you' | 'agent'): void {
     const list = (this.state.decisions ??= []);
     if (list.some((d) => d.decision === decision)) return;
@@ -960,7 +1023,7 @@ export class Run {
 
   // what a dev would raise with the lead before building; the run keeps going on the stated assumption
   private async postGaps(gaps: S.Gap[]): Promise<void> {
-    for (const g of gaps) this.decide('gap', `${g.what} Going ahead assuming: ${g.assumption}`, g.alternative ? `fallback: ${g.alternative}` : 'raised with the lead');
+    for (const g of gaps) this.decide('gap', g.what.trim(), `Assuming ${g.assumption.trim().replace(/\.$/, '')} until the lead replies${g.alternative.trim() ? `; if not, ${g.alternative.trim().replace(/\.$/, '')}` : ''}.`);
     const already = new Set(this.state.gapsPosted ?? []);
     gaps = gaps.filter((g) => !already.has(g.what.trim()));
     if (!gaps.length || !this.state.jira) return;
@@ -988,6 +1051,24 @@ export class Run {
 
   private logCalls(where: string, calls: S.Call[]): void {
     for (const c of calls) this.decide(where, `${c.question} Chose: ${c.chosen}`, c.why, false, c, this.state.grill?.answers[c.question]?.by ?? 'agent');
+  }
+
+  // findings still open after the last review round; where the dev hasn't said why it kept the code, it's asked once
+  private async recordDisagreements(where: string, findings: S.Finding[], responses: S.FindingResponse[]): Promise<void> {
+    const said = (f: S.Finding) => responses.find((r) => r.finding_id === f.id)?.reasoning.trim() ?? '';
+    const silent = findings.filter((f) => !said(f));
+    let views: Record<string, string> = {};
+    if (silent.length) {
+      try {
+        const r = await this.call('dev', `keep-why-${this.state.ledger.length}`, render(prompt('keep-why'), {
+          findings: silent.map((f) => `- ${f.id}: ${f.title.trim()}. ${f.detail.split('\n')[0].trim()}`).join('\n'),
+        }), S.KeepWhy, 'read');
+        views = Object.fromEntries(r.reasons.map((x) => [x.finding_id, x.why.trim()]));
+      } catch {
+        // the MR line just goes without the dev's view
+      }
+    }
+    for (const f of findings) this.state.disagreements.push({ where, finding: f, devReasoning: said(f) || views[f.id] || '' });
   }
 
   private decidedBy(c: S.Call): string {
@@ -1100,7 +1181,6 @@ export class Run {
         switched.push(`- ${it.question}\n  The developer first chose: ${it.chosen}\n  After the reviewer's challenge, they chose: ${a.chosen}`);
       } else {
         grill.kept = [...new Set([...(grill.kept ?? []), it.question])];
-        this.decide('plan review', `Kept despite the reviewer: ${it.question} → ${it.chosen}`, it.why);
       }
     }
     grill.challenges = undefined;
@@ -1139,13 +1219,7 @@ export class Run {
     return answers;
   }
 
-  // the dev agent pushed back on reviewer findings; those are decisions too
-  private logRejections(where: string, findings: S.Finding[], responses: S.FindingResponse[]): void {
-    for (const r of responses) {
-      const f = findings.find((x) => x.id === r.finding_id);
-      if (f && r.decision === 'reject') this.decide(where, `Kept it as is despite the reviewer: ${f.title}`, r.reasoning);
-    }
-  }
+
 
   private note(text: string): void {
     if (!this.state.gateNotes.includes(text)) this.state.gateNotes.push(text);
@@ -1208,8 +1282,7 @@ export class Run {
       const required = forDev.findings.filter((f) => f.required);
       if ((review.verdict === 'approved' || !required.length) && !youChanged) break;
       if (round === rounds) {
-        const responses = plan.responses;
-        for (const f of required) this.state.disagreements.push({ where: 'plan', finding: f, devReasoning: responses.find((r) => r.finding_id === f.id)?.reasoning ?? '' });
+        await this.recordDisagreements('plan', required, plan.responses);
         break;
       }
       // only your own switch changed the plan: the reviewer checks it again
@@ -1218,7 +1291,6 @@ export class Run {
         continue;
       }
       plan = await this.call('dev', `plan-revise-${round}`, render(prompt('plan-revise'), { review: json(forDev), askRule: this.askRule() }), S.Plan, 'read');
-      this.logRejections('plan review', forDev.findings, plan.responses);
       plan = this.savePlan(plan);
       previous = this.previous(forDev, plan.responses, answered);
     }
@@ -1305,7 +1377,8 @@ export class Run {
     log(`received ${answers.length} answer(s)`);
     this.state.humanTouches += 1;
     this.state.questions.answers.push(...answers);
-    for (const a of answers) this.decide('human', `Followed the answer: ${a}`, 'asked because the sources could not settle it', true);
+    const asked = this.state.questions.pending.map((q) => q.question.trim()).join(' / ');
+    this.decide('human', asked || 'Question from the agent', answers.join(' | '));
     this.state.questions.inbox = [];
     if (this.state.plan && this.state.resumePhase === 'implementing' && this.state.nextChunk === 0) {
       const plan = await this.call('dev', `answers-${this.state.ledger.length}`, render(prompt('answers'), { questions: json(this.state.questions.pending), answers: answers.map((a) => `- ${a}`).join('\n') }), S.Plan, 'read');
@@ -1397,7 +1470,7 @@ export class Run {
           const f = required.find((x) => x.severity === 'critical')!;
           await this.ask([{ id: `C${chunk.id}-${f.id}`, audience: 'tech_lead', question: `Dev and reviewer could not agree on: ${f.title}. ${f.detail}`, why_unresolvable: `Dev Agent's position: ${work.responses.find((r) => r.finding_id === f.id)?.reasoning ?? 'n/a'}`, recommendation: 'Decide which position to follow', blocking: true }], 'implementing');
         }
-        for (const f of required) this.state.disagreements.push({ where: `chunk ${chunk.id}`, finding: f, devReasoning: work.responses.find((r) => r.finding_id === f.id)?.reasoning ?? '' });
+        await this.recordDisagreements(`chunk ${chunk.id}`, required, work.responses);
         if (!gatesOk(results)) this.state.gateNotes.push(`Chunk ${chunk.id} committed with failing focused gates:\n${gateReport(results)}`);
         break;
       }
@@ -1407,14 +1480,12 @@ export class Run {
         review: `## Review\n\n\`\`\`json\n${json(review)}\n\`\`\``,
       }), S.DevWork, 'write');
       for (const r of work.responses) if (r.decision === 'reject' && results.some((x) => x.failures.includes(r.finding_id))) expected.set(r.finding_id, r.reasoning);
-      this.logRejections(`review of ${chunk.title}`, review.findings, work.responses);
       writeJson(workFile, work);
       await this.guard();
       results = effective(await this.gates(chunk.repo, 'focused', `chunk-${chunk.id}-fix-${round}`));
       previous = this.previous(review, work.responses);
     }
     writeJson(workFile, work);
-    this.logCalls(`chunk ${chunk.id}`, work.calls ?? []);
     if (chunk.is_tests_chunk) this.state.expectedFailures[chunk.repo] = {};
     else for (const [f, why] of expected) carried[f] = why;
     this.save();
@@ -1436,9 +1507,7 @@ export class Run {
   // ---------------------------------------------------------------- stacked branches and alignment
 
   private ownRuns() {
-    return listRuns(this.config)
-      .filter((r) => r.key !== this.state.key)
-      .map((r) => ({ key: r.key, branches: Object.fromEntries(Object.values(r.repos).map((x) => [x.key, x.branch])) }));
+    return realRunBranches(this.config, this.state.key);
   }
 
   // where another ticket's code lives in one repo: this tool's own run first, then the remote
@@ -1546,7 +1615,7 @@ export class Run {
   // only real calls reach the reviewer; a rebase with none gets a one-line note when an MR is open
   private async reportResolution(repoKey: string, onto: string, resolved: { files: string[]; decisions: Array<{ file: string; decision: string; why: string }> }): Promise<void> {
     if (!resolved.files.length) return;
-    for (const d of resolved.decisions) this.decide(`conflict in ${d.file}`, d.decision, d.why);
+    for (const d of resolved.decisions) this.decide(`conflict in ${d.file}`, d.decision, d.why, true);
     const mr = this.state.repos[repoKey].mr;
     if (!mr) return;
     const head = `Rebased onto the latest \`${onto.replace(/^origin\//, '')}\` and resolved conflicts in ${resolved.files.map((f) => `\`${f}\``).join(', ')}.`;
@@ -1589,7 +1658,7 @@ export class Run {
     if (this.state.jira) {
       for (const t of related) {
         try {
-          writeText(path.join(relatedDir, `${t.key}.md`), relatedText(this.config, await this.jira.getIssue(t.key)));
+          writeText(path.join(relatedDir, `${t.key}.md`), relatedText(this.config, await issueWithLatestComments(this.jira, t.key)));
         } catch {
           // keep the copy from planning
         }
@@ -1649,7 +1718,7 @@ export class Run {
       changed = true;
     }
     this.state.alignment = res.issues;
-    for (const a of res.issues) this.decide('alignment', `${a.ticket}: ${a.problem}`, `${a.action.replace('_', ' ')}. ${a.detail}`);
+    for (const a of res.issues) this.decide('alignment', `${a.ticket}: ${a.problem}`, `${a.action.replace('_', ' ')}. ${a.detail}`, true);
     this.save();
     return changed;
   }
@@ -1721,14 +1790,13 @@ export class Run {
       }
       if (audit.verdict === 'approved' || !required.length) break;
       const fix = await this.call('dev', `audit-fix-${round}`, render(prompt('fix-final'), { gates: '', review: `## Audit\n\n\`\`\`json\n${json(audit)}\n\`\`\`` }), S.DevWork, 'write');
-      this.logRejections('final audit', audit.findings, fix.responses);
       await this.guard();
       for (const key of await this.reposWithChanges()) {
         await this.commit(key, this.commitMessage(key, fix.commit_summary, 'fix'), `audit-${round}`);
         changed = true;
       }
       if (round === rounds) {
-        for (const f of required) this.state.disagreements.push({ where: 'final audit', finding: f, devReasoning: fix.responses.find((r) => r.finding_id === f.id)?.reasoning ?? '' });
+        await this.recordDisagreements('final audit', required, fix.responses);
       }
       previous = this.previous(audit, fix.responses);
     }
@@ -1759,26 +1827,25 @@ export class Run {
     if (await this.align('final')) changed = true;
     if (changed) await this.finalGates('final-recheck');
 
-    log('handoff');
-    const handoff = await this.call('dev', 'handoff', render(prompt('handoff'), {
+    log('write-up');
+    const writeUp = await this.call('dev', 'write-up', render(prompt('write-up'), {
       commits: this.commitList(),
       gates: finalResults(),
       decisions: this.decisionLines(false) || 'none',
-      disagreements: this.state.disagreements.map((d) => `- ${d.where}: ${d.finding.title} (dev: ${d.devReasoning})`).join('\n') || 'none',
       curlRule: this.state.plan?.needs_qa_curl
         ? 'for every endpoint added or changed, a ready-to-run curl for QA against the shared development environment (use placeholders like <BASE_URL> and <TOKEN>, never real secrets), with the expected response and the key error cases.'
         : 'empty list unless this ticket adds or changes an API.',
-    }), S.Handoff, 'read');
-    for (const [field, value] of Object.entries(handoff)) {
-      if (typeof value === 'string') (handoff as Record<string, unknown>)[field] = stripFieldTags(value);
+    }), S.WriteUp, 'read');
+    for (const [field, value] of Object.entries(writeUp)) {
+      if (typeof value === 'string') (writeUp as Record<string, unknown>)[field] = stripFieldTags(value);
     }
-    writeJson(this.file('handoff.json'), handoff);
+    writeJson(this.file('write-up.json'), writeUp);
     this.state.deploy = await this.deployNotes();
     if (this.state.deploy.length) writeText(this.file('deployment.md'), `# Deploy notes for ${this.state.key}\n\n${this.state.deploy.map((l) => `- ${l}`).join('\n')}`);
-    this.state.changes = handoff.changes ?? [];
+    this.state.changes = writeUp.changes ?? [];
     if (this.state.changes.length || this.state.plan?.gaps?.length) await this.impact();
-    if (handoff.next_tickets_md.trim()) writeText(this.file('handoff-note.md'), `# Handoff from ${this.state.key}: ${this.state.summary}\n\n${handoff.next_tickets_md}`);
-    for (const key of Object.keys(this.state.repos)) writeText(this.file(`mr-${key}.md`), this.mrDescription(key, handoff));
+    if (writeUp.handoff_note.trim()) writeText(this.file('handoff-note.md'), `# Handoff from ${this.state.key}: ${this.state.summary}\n\n${writeUp.handoff_note}`);
+    for (const key of Object.keys(this.state.repos)) writeText(this.file(`mr-${key}.md`), this.mrDescription(key));
     this.state.phase = this.state.publish ? 'publishing' : 'done';
     this.save();
   }
@@ -1821,25 +1888,25 @@ export class Run {
       const minus = keysIn('-');
       const added = [...plus].filter((k) => !minus.has(k));
       const removed = [...minus].filter((k) => !plus.has(k));
-      if (added.length) lines.push(`${r.key}: new env var${added.length > 1 ? 's' : ''} ${added.map((k) => `\`${k}\``).join(', ')} (see \`.env.example\`)`);
-      if (removed.length) lines.push(`${r.key}: removed from \`.env.example\`: ${removed.map((k) => `\`${k}\``).join(', ')}`);
+      if (added.length) lines.push(`new env ${added.map((k) => `\`${k}\``).join(', ')} (${r.key})`);
+      if (removed.length) lines.push(`env no longer used: ${removed.map((k) => `\`${k}\``).join(', ')} (${r.key})`);
       // new code reading an env var the example file doesn't list is the classic "works on my machine" deploy break
       const codeDiff = await g.git(r.worktree, 'diff', '-U0', range, '--', '*.js', '*.ts', '*.mjs', '*.cjs', ':!test/**', ':!**/*.spec.*', ':!**/*.test.*').catch(() => '');
       const addedCode = codeDiff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).join('\n');
       const used = new Set([...addedCode.matchAll(/process\.env(?:\.([A-Z][A-Z0-9_]*)|\[['"]([A-Z][A-Z0-9_]*)['"]\))/g)].map((m) => m[1] ?? m[2]));
       const example = await g.git(r.worktree, 'show', 'HEAD:.env.example').catch(() => '');
       const missing = [...used].filter((k) => k !== 'NODE_ENV' && !new RegExp(`^\\s*${k}=`, 'm').test(example));
-      if (missing.length) lines.push(`${r.key}: the code now reads ${missing.map((k) => `\`${k}\``).join(', ')}, which \`.env.example\` doesn't have yet`);
+      if (missing.length) lines.push(`set ${missing.map((k) => `\`${k}\``).join(', ')}, missing from .env.example (${r.key})`);
       const newFiles = (await g.git(r.worktree, 'diff', '--name-only', '--diff-filter=A', range).catch(() => '')).split('\n').filter(Boolean);
       const migrations = newFiles.filter((f) => /(^|\/)migrations\//.test(f));
       const seeders = newFiles.filter((f) => /(^|\/)seeders\//.test(f));
-      if (migrations.length) lines.push(`${r.key}: run migrations (${migrations.length} new: ${migrations.map((f) => `\`${path.basename(f)}\``).join(', ')})`);
-      if (seeders.length) lines.push(`${r.key}: run seeders (${seeders.length} new)`);
+      if (migrations.length) lines.push(`run ${migrations.length} migration${migrations.length > 1 ? 's' : ''} (${r.key})`);
+      if (seeders.length) lines.push(`run ${seeders.length} seeder${seeders.length > 1 ? 's' : ''} (${r.key})`);
     }
     // business services first, then the gateway that calls them
     if (be.length > 1) {
       const order = [...be].sort((a, b) => Number(this.repoCfg(a.key).kind === 'backend-gateway') - Number(this.repoCfg(b.key).kind === 'backend-gateway'));
-      lines.push(`Deploy ${order.map((r) => r.key).join(' before ')}`);
+      lines.push(`deploy ${order.map((r) => r.key).join(' before ')}`);
     }
     return lines;
   }
@@ -1863,60 +1930,52 @@ export class Run {
     return now;
   }
 
-  // short and human up top; everything a curious reviewer might want is folded away at the bottom
-  mrDescription(repoKey: string, h: S.Handoff, companions: string[] = []): string {
-    const t = totals(this.state);
+  // short and human: what's different from the ticket, the decisions to double-check (folded), any open concern, deploy
+  mrDescription(repoKey: string): string {
     const repo = this.state.repos[repoKey];
-    const gateFile = this.file('gates', repoKey, 'final-0.result.json');
-    const bullets = (items: string[]) => items.map((i) => `- ${i}`).join('\n');
-    // models sometimes write "None. ..." instead of leaving a field empty
-    const real = (text: string) => (text.trim() && !/^(none|n\/a|-|nothing)\b/i.test(text.trim()) ? text.trim() : '');
-    const changes = this.state.changes ?? h.changes ?? [];
+    const decisions = (this.state.decisions ?? []).filter((d) => !d.note);
+    // only what needs to change elsewhere: other tickets, work nobody has, the spec
     const impact = this.state.impact;
-    const impactLines = impact && (impact.affected.length || impact.missing_work.length || impact.spec.length)
-      ? [impact.summary.trim(), ...impact.affected.map((a) => `${a.ticket}: ${a.note}`), ...impact.missing_work.map((m) => `No ticket covers: ${m.title} (${m.repo})`), ...impact.spec.map((x) => `Spec ${x.section} needs updating: ${x.should}`)].filter(Boolean)
+    const headsUp = impact
+      ? [
+          ...impact.affected.map((a) => `${a.ticket} needs updating: ${a.note.trim()}`),
+          ...impact.missing_work.map((m) => `No ticket covers: ${m.title.trim()} (${m.repo})`),
+          ...impact.spec.map((x) => `Spec ${x.section} needs updating: ${x.should.trim()}`),
+        ]
       : [];
+    // a mismatch with a connected ticket that was noted rather than fixed affects that ticket too
+    headsUp.push(...(this.state.alignment ?? []).filter((a) => a.action !== 'fixed').map((a) => `Doesn't line up with ${a.ticket}: ${a.problem.trim().replace(/\.$/, '')}.`));
     const fixes = this.state.parentRun && this.state.bugTriage?.verdict === 'bug' ? `Fixes a bug in ${this.state.parentRun.key}: ${this.state.bugTriage.cause.trim()}` : '';
-    const top = [
-      fixes,
-      h.mr_summary_md.trim(),
-      changes.length ? `**Different from the ticket**\n${bullets(changes.map((c) => withWhy(c.what, c.why)))}` : '',
-      h.decisions.length ? `**Worth a second look**\n${bullets(h.decisions.map((d) => `${d.decision.trim().replace(/\.$/, '')}: ${d.why.trim()}`))}` : '',
-      this.state.disagreements.length
-        ? `**Where the reviewer and I disagreed**\n${bullets(this.state.disagreements.map((d) => `${d.finding.title} (${d.where}). Reviewer: ${d.finding.detail.split('\n')[0]}${d.devReasoning.trim() ? ` Me: ${d.devReasoning.trim()}` : ''}`))}`
-        : '',
-      real(h.risks_md) || impactLines.length ? `**Heads up**\n${[real(h.risks_md), impactLines.length ? bullets(impactLines) : ''].filter(Boolean).join('\n')}` : '',
-      h.qa_curls.length || h.manual_checks.length
-        ? `**To test**\n${[h.manual_checks.length ? bullets(h.manual_checks.map((c) => `[ ] ${c}`)) : '', ...h.qa_curls.map((c) => `${c.title}\n\`\`\`bash\n${c.curl}\n\`\`\`\nExpected: ${c.expected}`)].filter(Boolean).join('\n\n')}`
-        : '',
-      this.state.deploy?.length ? `**Deploying**\n${bullets(this.state.deploy)}` : '',
-      repo?.parent
-        ? `**Depends on ${repo.parent.ticket}**: built on its ${repo.parent.mr ? `MR (${repo.parent.mr})` : `branch \`${repo.parent.branch}\``} because ${repo.parent.reason}. Please review ${repo.parent.ticket} first; until it merges, this MR also shows its changes.`
-        : '',
-      companions.length ? `**Goes with**\n${bullets(companions)}` : '',
-      this.state.jira ? `Jira: ${this.config.jira.base_url}/browse/${this.state.key}` : '',
-    ];
-    const guide = bullets(h.review_guide.map((g) => `\`${g.file}\`: ${g.what.trim()}`));
-    const details = [
-      `**Tested:** ${h.testing_md.trim()}`,
-      fs.existsSync(gateFile) ? `**Checks run by the pipeline**\n${gateReport(readJson(gateFile))}` : '',
-      this.state.plan?.related_tickets.length
-        ? `**Connected tickets checked**\n${bullets(this.state.plan.related_tickets.map((r) => `${r.key}: ${r.why}`))}\n\nAlignment before this MR: ${this.state.alignment?.length ? '\n' + bullets(this.state.alignment.map((a) => `${a.ticket} (${a.action.replace('_', ' ')}): ${a.problem}. ${a.detail}`)) : 'consistent.'}`
-        : '',
-      h.next_tickets_md.trim() ? `**Notes for related tickets**\n${h.next_tickets_md.trim()}` : '',
-      this.state.gateNotes.length ? `**Pipeline notes**\n${bullets(this.state.gateNotes)}` : '',
-      `Built by closio-agent: ${repo?.commits.length ?? 0} commits, ${t.calls} agent calls, ~$${t.costUsd.toFixed(2)}, ${t.minutes.toFixed(0)} agent-minutes. Models: ${Object.entries(this.state.models).map(([r, m]) => `${r}=${m.provider}:${m.model ?? 'default'}`).join(', ')}. Full decision log: \`runs/${this.state.key}/decisions.md\`.`,
-    ].filter(Boolean);
     return [
-      ...top.filter(Boolean),
-      guide ? `<details><summary>Review guide</summary>\n\n${guide}\n\n</details>` : '',
-      `<details><summary>Pipeline details</summary>\n\n${details.join('\n\n')}\n\n</details>`,
-    ].filter(Boolean).join('\n\n');
+      fixes,
+      repo?.parent ? `**Depends on ${repo.parent.ticket}:** review that one first.` : '',
+      this.state.changes?.length ? `**Different from the ticket**\n${this.state.changes.map((c) => `- ${withWhy(c.what, c.why)}`).join('\n')}` : '',
+      headsUp.length ? `**Heads up**\n${headsUp.map((l) => `- ${l}`).join('\n')}` : '',
+      decisions.length ? `<details><summary>Decisions (${decisions.length}): what was chosen and why</summary>\n\n${decisions.map((d) => this.mrDecision(d)).join('\n\n')}\n\n</details>` : '',
+      this.state.disagreements.length
+        ? `**Unresolved reviewer concern${this.state.disagreements.length > 1 ? 's' : ''}**\n${this.state.disagreements.map((d) => `- Still open after ${this.config.limits.review_rounds} review rounds: ${concern(d.finding)}${d.devReasoning.trim() ? ` Dev's view: ${d.devReasoning.trim().replace(/[^.!?]$/, '$&.')}` : ''}`).join('\n')}`
+        : '',
+      this.state.deploy?.length ? `**Deploy:** ${this.state.deploy.join(' · ')}` : '',
+    ].filter(Boolean).join('\n\n') || 'Built as the ticket says; no open decisions.';
+  }
+
+  // one decision as a reviewer reads it in the MR: the question, the choice and why, the other options, who decided
+  private mrDecision(d: NonNullable<RunState['decisions']>[number]): string {
+    if (!d.call) {
+      if (d.where === 'gap') return `**Raised with the lead:** ${d.decision}\n${d.why}`;
+      if (d.where === 'human') return `**${d.decision}**\nAnswer: ${d.why}`;
+      const label = d.where === 'question' ? 'Settled without the PM or lead' : d.where === 'design' ? 'Design' : d.where;
+      return `**${label}:** ${d.decision.trim()}${d.why.trim() ? ` (${d.why.trim().replace(/\.$/, '')})` : ''}`;
+    }
+    const c = d.call;
+    const others = c.options.filter((o) => o.trim().toLowerCase() !== c.chosen.trim().toLowerCase());
+    const who = d.by === 'you' ? (this.state.grill?.kept?.includes(c.question) ? 'you decided; the reviewer challenged it and you kept it' : 'you decided') : 'agent';
+    return `**${c.question.trim()}**\nWent with ${c.chosen.trim()}: ${c.why.trim()}${others.length ? ` Also considered: ${others.map((o) => o.trim()).join('; ')}.` : ''} _(${who})_`;
   }
 
   async publishing(): Promise<void> {
     log('publishing');
-    const handoff = readJson<S.Handoff>(this.file('handoff.json'));
+    const writeUp = readJson<S.WriteUp>(this.file('write-up.json'));
     const touched = Object.values(this.state.repos).filter((r) => r.commits.length);
     if (!touched.length) throw new PipelineStop('failed', 'Nothing was committed, so there is nothing to publish');
     for (const repo of touched) {
@@ -1928,33 +1987,30 @@ export class Run {
         source: repo.branch,
         target: cfg.target_branch,
         title: fill(this.config.gitlab.mr.title_format, { key: this.state.key, summary: this.state.summary }),
-        description: this.mrDescription(repo.key, handoff),
-        reviewers: this.config.gitlab.mr.reviewers,
+        description: this.mrDescription(repo.key),
+        // a simulation never notifies anyone
+        reviewers: this.state.simulate ? [] : this.config.gitlab.mr.reviewers,
+        draft: this.state.simulate || undefined,
       });
       repo.mr = { projectId: mr.projectId, iid: mr.iid, url: mr.webUrl };
       log(`  MR ${repo.key}: ${mr.webUrl}`);
       this.save();
     }
-    if (touched.length > 1) {
-      for (const repo of touched) {
-        const others = touched.filter((r) => r !== repo).map((r) => `${r.key}: ${r.mr!.url}`);
-        await this.gitlab.updateDescription(repo.mr!.projectId, repo.mr!.iid, this.mrDescription(repo.key, handoff, others));
-      }
-    }
     if (this.state.jira) {
       await this.jira.transition(this.state.key, this.config.jira.statuses.code_review);
-      const curls = handoff.qa_curls.map((c) => `**${c.title}**\n\`\`\`\n${c.curl}\n\`\`\`\nExpected: ${c.expected}`).join('\n\n');
+      const curls = writeUp.qa_curls.map((c) => `**${c.title}**\n\`\`\`\n${c.curl}\n\`\`\`\nExpected: ${c.expected}`).join('\n\n');
       const ids = await this.mentions();
+      // the status already says code review; the comment carries only what's useful
       await this.jira.addComment(this.state.key, this.named([
-        `**Ready for code review.** ${handoff.jira_summary}`,
+        `MRs: ${touched.map((r) => `${r.key} ${r.mr!.url}`).join(' · ')}`,
         (this.state.changes ?? []).length ? `Different from the ticket:\n${(this.state.changes ?? []).map((c) => `- ${withWhy(c.what, c.why)}`).join('\n')}` : '',
-        `MRs:\n${touched.map((r) => `- ${r.key}: ${r.mr!.url}`).join('\n')}`,
         curls ? `**QA curls**\n\n${curls}` : '',
-        handoff.manual_checks.length ? `**Manual checks**\n${handoff.manual_checks.map((c) => `- ${c}`).join('\n')}` : '',
-        ...touched.filter((r) => r.parent).map((r) => `**Depends on ${r.parent!.ticket}** (${r.key}): please review and merge it first.`),
+        ...touched.filter((r) => r.parent).map((r) => `**Depends on ${r.parent!.ticket}** (${r.key}): review and merge it first.`),
         ...(this.state.alignment ?? []).filter((a) => a.action === 'needs_human').map((a) => `@tech_lead **Decision needed with ${a.ticket}:** ${a.problem}. ${a.detail}`),
         `Agent session: ${this.state.key}-dev (${this.state.devSession?.provider} ${this.state.devSession?.id}). Continue it with \`agent feedback ${this.state.key} "..."\`, or open it with \`agent session ${this.state.key}\`.`,
       ].filter(Boolean).join('\n\n'), ids), ids);
+      // its own comment, so connected tickets' runs find it on any laptop
+      if (writeUp.handoff_note.trim()) await this.jira.addComment(this.state.key, `${HANDOFF_HEADING}\n\n${writeUp.handoff_note.trim()}`);
     }
     this.state.codeReviewAt = now();
     this.state.phase = 'in_review';
@@ -2183,12 +2239,8 @@ export class Run {
 
   // keeps the MR text in step after feedback (changes, impact, deploy notes)
   private async refreshMrText(): Promise<void> {
-    if (!fs.existsSync(this.file('handoff.json'))) return;
-    const h = readJson<S.Handoff>(this.file('handoff.json'));
-    const withMr = Object.values(this.state.repos).filter((r) => r.mr);
-    for (const repo of withMr) {
-      const others = withMr.filter((r) => r !== repo).map((r) => `${r.key}: ${r.mr!.url}`);
-      await this.gitlab.updateDescription(repo.mr!.projectId, repo.mr!.iid, this.mrDescription(repo.key, h, others));
+    for (const repo of Object.values(this.state.repos).filter((r) => r.mr)) {
+      await this.gitlab.updateDescription(repo.mr!.projectId, repo.mr!.iid, this.mrDescription(repo.key));
     }
   }
 

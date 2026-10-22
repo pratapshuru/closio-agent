@@ -88,15 +88,17 @@ export type RunState = {
   baseOverride?: string;
   alignment?: Array<{ ticket: string; problem: string; action: string; detail: string }>;
   // every call made without asking a human, logged as it happens (runs/<KEY>/decisions.md)
-  // note: true for routine entries (branching, answers a human gave) that never reach the MR
+  // note: true for a record of what happened (branching, rebases, alignment, bug triage, QA); never in the MR
   decisions?: Array<{ at: string; where: string; decision: string; why: string; note?: boolean; call?: Call; by?: 'you' | 'agent' }>;
   // --ask: the developer answers every grill decision themselves
   askGrill?: boolean;
+  // --simulate: Jira writes go to would-post.md; MRs are drafts with no reviewers
+  simulate?: boolean;
   // asked: the one grill session happened; challenges: reviewer findings against the developer's own answers, waiting on them
   // calls: every decision put to the developer; round: grill rounds asked so far (the first is the grill itself);
   // done: the plan can be written; challenges: reviewer findings against the developer's answers, waiting on them
   grill?: { calls?: Call[]; answers: Record<string, GrillAnswer>; round?: number; done?: boolean; challenges?: Challenge[]; kept?: string[] };
-  // significant differences from the ticket or spec (handoff, then feedback rounds)
+  // significant differences from the ticket or spec (write-up, then feedback rounds)
   changes?: Array<{ kind: string; what: string; why: string }>;
   // protected files this run may edit (from --allow-edit)
   allowEdit?: string[];
@@ -168,6 +170,13 @@ export function listRuns(config: Config): RunState[] {
     .readdirSync(runsDir(config), { withFileTypes: true })
     .filter((d) => d.isDirectory() && hasRun(config, d.name))
     .map((d) => readJson<RunState>(stateFile(config, d.name)));
+}
+
+// where other tickets' code lives, from the runs on this laptop; simulations never count as real code
+export function realRunBranches(config: Config, exceptKey: string): Array<{ key: string; branches: Record<string, string> }> {
+  return listRuns(config)
+    .filter((r) => r.key !== exceptKey && !r.simulate)
+    .map((r) => ({ key: r.key, branches: Object.fromEntries(Object.values(r.repos).map((x) => [x.key, x.branch])) }));
 }
 
 export function totals(state: RunState): { costUsd: number; minutes: number; calls: number } {

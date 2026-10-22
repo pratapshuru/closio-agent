@@ -135,7 +135,7 @@ stateDiagram-v2
 | **Planning** | Dev bot recons and plans; reviewer challenges it; gaps raised; dependencies resolved. |
 | **Waiting** | Only when a person must answer something; the process exits cleanly and resumes later. |
 | **Building** | The chunk loop: write, check, review, fix, commit. One chunk at a time. |
-| **Finalizing** | Full checks, whole-ticket audit, cleanup pass, alignment, handoff (MR text, changes, deploy notes, impact). |
+| **Finalizing** | Full checks, whole-ticket audit, cleanup pass, alignment, write-up (changes, QA notes, handoff note, deploy notes, impact). |
 | **Publishing** | Push, MRs, Jira to Code Review. |
 | **In review** | Watched by `agent watch` until merged. |
 | **Done** | Card moved to Ready For Test, deploy notes posted. |
@@ -147,7 +147,7 @@ stateDiagram-v2
 - A chunk that was approved but whose commit failed (for example a git hook) commits on resume without being reviewed again.
 - Models can be switched on a run in progress (`agent run KEY --profile quality`).
 - All "wait for a person" cases (questions, missing design, a parent ticket not started) share one mechanism: write the question to `questions.md`, post it on Jira with the right person tagged, stop cleanly. The one exception is `--ask` grill questions: they're for the developer at this laptop, so they're only asked at the terminal and never go to Jira; with nobody at the terminal the run stops until `agent run KEY` is run at one.
-- At an interactive terminal, questions are asked right there: press Enter to accept the bot's recommendation, type your own answer, or type `later` to send it to Jira. `agent watch` never waits on the terminal.
+- Every question is asked at the terminal first, so whoever runs the pipeline can answer: blocker questions (Enter takes the bot's recommendation, or type your own answer), a missing design (drop the files and press Enter, or type `continue without design`), and a parent ticket with no branch yet (`build on <KEY>` or `develop`). Typing `later` sends it to Jira instead. `agent watch` never waits on the terminal, so with nobody there the question goes to Jira.
 
 ### 4.4 Why not LangGraph
 
@@ -194,7 +194,7 @@ Every step has a fixed answer shape (a zod schema), for example:
 - **Plan:** repos, facts with sources, calls, gaps, questions (who to ask, blocking or not, recommendation), chunks (repo, files, is it the tests chunk, done when), reuses, files to mirror, risks, upcoming tickets, done checklist, dependencies, design status.
 - **Review:** verdict (approved / changes required / needs a human), findings (severity, required or optional, location), status of earlier findings, assessments of the dev's questions.
 - **Dev work:** files changed, verification, deviations from the plan, new calls, commit summary, a response (accept or reject with reasoning) to each finding.
-- **Handoff:** MR summary, decisions, changes from the ticket, risks, testing, review guide per file, QA curls, manual checks, Jira summary, notes for later tickets.
+- **Write-up:** changes from the ticket, QA curls (BE), and the handoff note for connected tickets.
 
 Every field is required (nullable when optional), because Codex's strict mode rejects optional fields; this lets one schema work for both tools. Answers are validated again by the program; a bad answer is retried once.
 
@@ -262,7 +262,7 @@ The base prompt depends on the ticket. A backend ticket gets `prompts/dev/backen
 
 ### 6.3 The step templates
 
-About twenty: plan, plan-revise, review-plan, answers, chunk, chunk-fix, review-chunk, audit, fix-final, simplify, simplify-apply, align, handoff, impact, feedback, qa-answer, resolve-conflicts, review-rebase, sprint-plan, plus design variants (folder, saved, Figma MCP, none, unavailable, skipped).
+About twenty: plan, plan-revise, review-plan, answers, chunk, chunk-fix, review-chunk, audit, fix-final, simplify, simplify-apply, align, write-up, impact, feedback, qa-answer, resolve-conflicts, review-rebase, sprint-plan, plus design variants (folder, saved, Figma MCP, none, unavailable, skipped).
 
 ### 6.4 The repo's own notes
 
@@ -311,7 +311,7 @@ flowchart LR
 - **Recon:** code in FE and BE, merged code, the other side of the API, spec sections, connected tickets, and dev data via read-only queries (7.9).
 - **Facts:** whatever the sources settle goes into the plan's facts, each with its source. These are never grilled.
 - **Self-grill:** the team's `/grill-me` skill, run by the bot on itself, only on what recon left open (sources silent, conflicting, or several valid ways). Each open choice ends up as one of:
-  - **a decision:** saved with the question, every option, the recommended one, what was chosen and why. All of them go to `decisions.md` and into the plan under "Decisions taken during the grill phase"; the few worth a second look go into the MR (for example "kept the repo's outlined button instead of Figma's filled one");
+  - **a decision:** saved with the question, every option, the recommended one, what was chosen and why. All of them go to `decisions.md` and into the plan under "Decisions taken during the grill phase"; all of them go into the MR, folded (for example "kept the repo's outlined button instead of Figma's filled one");
   - **a gap** (needed from another ticket or the spec and missing, or clashing): posted on Jira tagging the lead, on both tickets; work continues on a stated assumption;
   - **an extreme blocker:** a question to the right person (PM for product, tech lead for contracts and architecture, the developer for local things), with the bot's recommendation.
 - **`--ask`:** the developer answers the grill instead of the bot, and the plan is written only after that. Recon and the grill run as their own step; each open decision is shown one at a time at the terminal, with its options and the bot's recommendation (with nobody at the terminal, the run stops until someone runs it at one). Answers that open new decisions bring follow-up questions, up to `limits.grill_rounds` (default 3) rounds; then the plan is written once, on all the answers. Plan review settles new decisions from the sources and those answers, and asks the developer only when nothing can settle one; without `--ask` it never asks the developer. Coding never asks. Hard blockers for the PM or tech lead go to them on Jira in both modes. The reviewer checks the developer's decisions too: a challenge to one goes to the developer, with the reviewer's evidence, to keep or switch. Every decision records whether you or the bot made it.
@@ -339,7 +339,7 @@ flowchart TD
 - One chunk = one atomic commit in one repo, small enough to review in one sitting.
 - Commit message: `type(KEY): summary`. The type follows the chunk: `feat`, `test` for the tests chunk, `fix` for bug tickets, `refactor` for the cleanup pass.
 - The dev answers each finding with accept or reject plus reasoning; the reviewer accepts a good rebuttal instead of repeating itself.
-- Where a repo's pre-commit hook can't pass locally (WS2's coverage hook), that repo is set to skip hooks; the program's checks run instead and the MR says so.
+- Where a repo's pre-commit hook can't pass locally (WS2's coverage hook), that repo is set to skip hooks; the program's own checks run instead.
 
 ### 7.5 Tests and checks
 
@@ -356,30 +356,28 @@ flowchart TD
 2. **Whole-ticket audit** by the same reviewer, against the plan's done checklist: every acceptance criterion, states, edge cases, existing flows that must still work.
 3. **Cleanup pass:** a separate simplifier suggests behaviour-preserving cleanups; the dev applies them; checks and the reviewer must pass, otherwise the cleanup is discarded rather than argued about.
 4. **Alignment check** with connected tickets (8.2).
-5. **Handoff:** MR text, decisions, changes from the ticket, risks, testing summary, review guide per file, QA curls for API tickets, manual checks, Jira summary, notes for later tickets (saved to `runs/KEY/handoff-note.md`, read by the next ticket's run).
+5. **Write-up:** changes from the ticket, QA curls for API tickets, and the handoff note for connected tickets (posted on the Jira card, with a copy in `runs/KEY/handoff-note.md`). The MR is built by code from `decisions.md`, the changes, the impact check and the deploy notes, not written freehand; the QA curls and handoff note go on the Jira card.
 6. **Deploy notes** (BE only, read from the diff, 7.7).
 7. **Impact check**, only if there were gaps or changes (section 9).
 
 ### 7.7 MR description, Jira and deploy notes
 
-**MR description**, written in a developer's voice. Visible part (each section hidden when empty):
-- what and why;
+**MR description**, short and plain, each part shown only when it has something:
+- "Fixes a bug in SCRUM-xxx: \<cause\>" (bug tickets) and "Depends on SCRUM-xxx: review that one first" (stacked branches), one line each;
 - **Different from the ticket** (for QA and the PM);
-- **Worth a second look** (at most five decisions from `decisions.md` a teammate should check);
-- **Where the reviewer and I disagreed**;
-- **Heads up** (real risks and impact);
-- **To test**;
-- **Deploying**;
-- **Depends on** (a stacked parent), **Goes with** (MRs in other repos for the same ticket).
+- **Heads up**: only when something must change elsewhere: the impact check's findings (another ticket to update, work no ticket covers, a spec line now wrong) and any mismatch with a connected ticket that was noted rather than fixed, one line each;
+- **Decisions**, folded: every decision from `decisions.md`. A grill decision shows the question, what was chosen and why in one sentence, the other options, and who decided; a gap shows the assumption and the fallback; a blocker answer shows the question and the answer; a question settled without the PM or lead, or a UI built without the design, shows in a line;
+- **Unresolved reviewer concern**: only when the reviewer still saw a problem after three rounds, with the reviewer's point and, when the dev gave one, its view, in a line;
+- **Deploy**: one short line for BE (env vars, migrations, order).
 
-Folded: a review guide per file, the checks that ran, connected tickets checked, notes for later tickets.
+Code-review back-and-forth and small coding choices stay in the run folder, not in the MR or `decisions.md`. A record of what happened (branching, rebase conflict calls, alignment, bug triage, QA replies) sits under "Other notes" in `decisions.md` and stays out of the MR description; a rebase with real judgement calls also leaves its own short note on the MR. Small choices the dev made while coding are kept in the run folder (`.agent/`). When there's nothing to show, the MR says "Built as the ticket says; no open decisions."
 
-**Jira:** In Development when the run starts; Code Review when MRs open, with a short summary, what differs from the ticket, and QA curls for APIs; Ready For Test when every MR merges, with deploy notes. Comments tag people with real Jira mentions. If Jira ever rejects the formatting of a comment, it's resent as plain text so publishing never blocks.
+**Jira:** In Development when the run starts; Code Review when MRs open, with one comment holding the MR links, what differs from the ticket, QA curls for APIs, any depends-on, and the agent session (the status itself says it's in code review), plus the handoff note as its own comment; Ready For Test when every MR merges, with deploy notes. Comments tag people with real Jira mentions. If Jira ever rejects the formatting of a comment, it's resent as plain text so publishing never blocks.
 
 **Deploy notes (BE only)**, read from the diff by code, shown in the MR and posted on Jira at merge:
 - env vars added to or removed from `.env.example`;
 - env vars the new code reads (`process.env.X`) that `.env.example` doesn't list;
-- new migrations and seeders, by file name;
+- how many new migrations and seeders to run;
 - deploy order when a ticket spans BE repos (services before the gateway: WS2 before WS1).
 
 Nothing is shown when there's nothing to do. FE never needs deploy notes.
@@ -388,7 +386,6 @@ Nothing is shown when there's nothing to do. FE never needs deploy notes.
 
 - Push each repo's branch; open (or reuse) one MR per repo, targeting that repo's branch (`develop` / `development`).
 - Draft MRs while testing (`gitlab.mr.draft: true` in your local config); reviewers assigned from config.
-- MRs of the same ticket link to each other ("Goes with").
 - Jira moved to Code Review with the summary comment.
 
 ### 7.9 Data questions (BE)
@@ -420,7 +417,7 @@ This replaced pasting the whole sprint into the prompt.
 
 ### 8.2 Alignment check
 
-Before every MR, and on demand with `agent align KEY`, the dev bot re-reads the connected tickets fresh and checks: API contracts across FE and BE, shared code another ticket created or changed, the parent ticket's review lessons, acceptance criteria edited since, and whether upcoming tickets can reuse what was built. Each issue is **fixed** (small, obvious), **noted** in the MR, or flagged as **needs a human** (lead tagged on Jira).
+Before every MR, and on demand with `agent align KEY`, the dev bot re-reads the connected tickets fresh and checks: API contracts across FE and BE, shared code another ticket created or changed, the parent ticket's review lessons, acceptance criteria edited since, and whether upcoming tickets can reuse what was built. Each issue is **fixed** (small, obvious), **noted** in the MR's Heads up, or flagged as **needs a human** (lead tagged on Jira, and in Heads up too).
 
 ### 8.3 Building on another ticket (stacked branches)
 
@@ -451,7 +448,7 @@ flowchart TD
 
 ### 8.5 Handoff notes for later tickets
 
-Each run writes a short note to `runs/KEY/handoff-note.md`: what this ticket built that others should reuse and exactly where (components, functions, endpoints and their contract), decisions, gotchas, review lessons, and what was left for upcoming tickets. Connected tickets' runs read it.
+Each run writes a short note for connected tickets: what this ticket built that others should reuse and exactly where (components, functions, endpoints and their contract), decisions that affect them, gotchas, review lessons, and what was left for upcoming tickets. When the MR opens it's posted as its own comment on the Jira card ("Handoff for connected tickets"), with a copy in `runs/KEY/handoff-note.md`. A connected ticket's run reads it from the card, so it works on any laptop, and the base prompts tell the dev to reuse what it points to and the reviewer to check that.
 
 ---
 
@@ -462,7 +459,7 @@ Changes happen during development, so the ticket and spec quietly go stale, and 
 ```mermaid
 flowchart LR
   G[Planning: gaps] --> J1[Jira: tag the lead<br/>on both tickets]
-  H[Handoff and feedback: changes] --> J2[MR and Jira card<br/>for QA and the PM]
+  H[Write-up and feedback: changes] --> J2[MR and Jira card<br/>for QA and the PM]
   G --> A{Any gaps or changes?}
   H --> A
   A -- no --> Z[Nothing runs]
@@ -472,8 +469,8 @@ flowchart LR
 ```
 
 - **Gaps** (at planning): what this ticket needs from other tickets or the spec that isn't there, or clashes. Example: "AGENT-8 needs `target_summary` in the response; the spec has it, AGENT-9 doesn't. Going ahead assuming it gets added."
-- **Changes** (at handoff, and from feedback rounds): only what makes the ticket or spec wrong now: behaviour that differs from the ticket or spec, things added beyond the ticket, things left out, contract changes. Internal choices never count.
-- **Impact check** (one step in the same dev conversation, only when there were gaps or changes): which other tickets must change and how, work no ticket covers (written as a draft ticket), and spec sections that are now wrong. Saved locally; a short version goes in the MR's Heads up. `agent impact KEY --post` notes it on the affected tickets after you've read it. Draft tickets stay with you and the lead.
+- **Changes** (at the write-up, and from feedback rounds): only what makes the ticket or spec wrong now: behaviour that differs from the ticket or spec, things added beyond the ticket, things left out, contract changes. Internal choices never count.
+- **Impact check** (one step in the same dev conversation, only when there were gaps or changes): which other tickets must change and how, work no ticket covers (written as a draft ticket), and spec sections that are now wrong. Saved locally; when it finds something, the MR's Heads up lists it, one line each. `agent impact KEY --post` notes it on the affected tickets after you've read it. Draft tickets stay with you and the lead.
 - A ticket that just follows its ticket triggers nothing.
 
 ---
@@ -660,9 +657,10 @@ Our VPN server sends its certificate (a normal GoDaddy wildcard certificate for 
 ## 13. Resume, visibility and convenience
 
 - **Live status line:** under each running step, one line rewritten every second: how long it has been running and what the bot is doing right now ("reading src/routes/healthCheckRoutes.js", "running npx vitest", "writing its answer"). After 20 seconds of silence it says "thinking". Logs written to a file get a quiet heartbeat instead.
-- **Run folder:** every prompt, answer, review, check result and the decision log (`decisions.md`: every decision made without asking a PM or lead, with its options and who decided it, the bot or you in the grill) are kept per ticket.
+- **Run folder:** every prompt, answer, review, check result and the decision log (`decisions.md`: the decisions about what to build, made without asking a PM or lead (grill decisions, gap assumptions, blocker answers, questions settled without the PM or lead, a UI built without the design), with their options and who decided, the bot or you in the grill; small coding choices stay out) are kept per ticket.
 - **`agent status KEY`:** plan, commits, MRs at a glance.
 - **`agent session KEY`:** a safe copy of the dev bot's conversation.
+- **Trial runs:** `--simulate` reads Jira but never writes to it (what it would post goes to `runs/KEY/would-post.md`), and opens draft MRs with no reviewers.
 - **Questions in the terminal**, with Jira as the fallback (except `--ask` grill questions, which are only asked at the terminal).
 - **Keeping the Mac awake:** run long jobs with `caffeinate -is agent run KEY` (macOS's built-in tool; `-i` blocks idle sleep, `-s` blocks system sleep on power). Closing the lid still sleeps the Mac.
 
@@ -695,7 +693,7 @@ agent replay REPLAY-550 --repo ws2targetsales --base 60afea5 --reference b57cb4c
 | What happened | What we changed |
 |---|---|
 | WS2's test suite crashed without env, and the crash was cached as the baseline | A crashed baseline stops the run; WS2 checks load `.env.example` |
-| WS2's pre-commit coverage hook can't pass locally | Hooks can be skipped per repo; the program's checks run instead; noted in the MR |
+| WS2's pre-commit coverage hook can't pass locally | Hooks can be skipped per repo; the program's checks run instead |
 | The cheapest reviewer model looped while writing a review | Test profile moved to a mid-level reviewer; the live status line shows a stuck step |
 | Expected test failures had to be re-justified in every chunk | Carried forward until the tests chunk |
 | Commit types were wrong (`feat` on tests or bug fixes) | Type follows the chunk |
@@ -794,7 +792,7 @@ agent replay REPLAY-550 --repo ws2targetsales --base 60afea5 --reference b57cb4c
 | **Baseline** | Which tests already failed before the ticket's changes |
 | **Worktree** | A separate checkout of a repo for one ticket, so your own checkout is untouched |
 | **Stacked branch** | A ticket's branch built on another ticket's unmerged branch |
-| **Decision (call)** | A choice recon left open, settled by you in the grill (`--ask`) or by the bot, saved with its options, recommendation, choice and why in `decisions.md`; the most important appear in the MR as "Worth a second look" |
+| **Decision (call)** | A choice recon left open, settled by you in the grill (`--ask`) or by the bot, saved with its options, recommendation, choice and why in `decisions.md`; all appear in the MR, folded |
 | **Gap** | Something this ticket needs from another ticket or the spec that's missing or clashing |
 | **Change** | Something built differently from the ticket or spec |
 | **Impact check** | Which other tickets, uncovered work or spec sections a ticket's gaps and changes affect |

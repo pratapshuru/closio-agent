@@ -83,6 +83,7 @@ export class GitLab {
     title: string;
     description: string;
     reviewers: string[];
+    draft?: boolean;
   }): Promise<MergeRequest> {
     const projectId = await this.projectId(opts.remotePath);
     const existing = await this.call<any[]>('GET', `/projects/${projectId}/merge_requests?state=opened&source_branch=${encodeURIComponent(opts.source)}`);
@@ -91,7 +92,7 @@ export class GitLab {
     const created = await this.call('POST', `/projects/${projectId}/merge_requests`, {
       source_branch: opts.source,
       target_branch: opts.target,
-      title: mr.draft ? `Draft: ${opts.title}` : opts.title,
+      title: (opts.draft ?? mr.draft) ? `Draft: ${opts.title}` : opts.title,
       description: opts.description,
       remove_source_branch: mr.remove_source_branch,
       reviewer_ids: await this.userIds(opts.reviewers),

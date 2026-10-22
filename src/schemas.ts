@@ -47,6 +47,9 @@ export const Gap = z.object({
 export type Gap = z.infer<typeof Gap>;
 
 // a significant way the built work differs from the ticket or spec; internal choices never count
+// why the dev kept something the reviewer still disagreed with after the last round
+export const KeepWhy = z.object({ reasons: z.array(z.object({ finding_id: z.string(), why: z.string() })) });
+
 export const Change = z.object({
   kind: z.enum(['ticket', 'spec', 'added', 'removed', 'contract']),
   what: z.string(),
@@ -145,22 +148,15 @@ export const Simplify = z.object({
 });
 export type Simplify = z.infer<typeof Simplify>;
 
-export const Handoff = z.object({
-  mr_summary_md: z.string(),
-  // the calls worth a second look, condensed from the run's decision log
-  decisions: z.array(z.object({ decision: z.string(), why: z.string() })),
-  testing_md: z.string(),
-  risks_md: z.string(),
-  review_guide: z.array(z.object({ file: z.string(), what: z.string() })),
+// the write-up once the work is done: what's different from the ticket, QA curls, and the handoff note
+export const WriteUp = z.object({
   // usually empty: only what makes the ticket or spec wrong now
   changes: z.array(Change),
   qa_curls: z.array(z.object({ title: z.string(), curl: z.string(), expected: z.string() })),
-  manual_checks: z.array(z.string()),
-  jira_summary: z.string(),
-  // for tickets that come later: what was built to reuse, decisions, gotchas, what is left
-  next_tickets_md: z.string(),
+  // for connected tickets: what was built to reuse and where, the contract, gotchas, what's left; posted on the card
+  handoff_note: z.string(),
 });
-export type Handoff = z.infer<typeof Handoff>;
+export type WriteUp = z.infer<typeof WriteUp>;
 
 export const Feedback = z.object({
   summary: z.string(),

@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import type { Config } from './config.ts';
 import { requireEnv } from './config.ts';
 import { download, request } from './http.ts';
@@ -146,9 +148,12 @@ export function markdownToAdf(markdown: string, mentions: Record<string, string>
 export class Jira {
   private config: Config;
   private auth: string;
+  // --simulate: reads work as usual, but every write is only recorded in this file
+  private wouldPost?: string;
 
-  constructor(config: Config) {
+  constructor(config: Config, opts: { wouldPost?: string } = {}) {
     this.config = config;
+    this.wouldPost = opts.wouldPost;
     this.auth = 'Basic ' + Buffer.from(`${requireEnv('JIRA_EMAIL')}:${requireEnv('JIRA_API_TOKEN')}`).toString('base64');
   }
 
@@ -238,7 +243,16 @@ export class Jira {
     }));
   }
 
+  private recordInstead(what: string): void {
+    fs.mkdirSync(path.dirname(this.wouldPost!), { recursive: true });
+    fs.appendFileSync(this.wouldPost!, `## ${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${what}\n\n`);
+  }
+
   async addComment(key: string, markdown: string, mentions: Record<string, string> = {}): Promise<string> {
+    if (this.wouldPost) {
+      this.recordInstead(`would comment on ${key}${Object.keys(mentions).length ? ` (tagging ${Object.keys(mentions).join(', ')})` : ''}\n\n${markdown.trim()}\n\n_${MARKER}_`);
+      return 'simulated';
+    }
     const text = `${markdown}\n\n_${MARKER}_`;
     try {
       const res = await this.call('POST', `/rest/api/3/issue/${key}/comment`, { body: markdownToAdf(text, mentions) });
@@ -259,6 +273,10 @@ export class Jira {
   }
 
   async transition(key: string, status: string): Promise<boolean> {
+    if (this.wouldPost) {
+      this.recordInstead(`would move ${key} to ${status}`);
+      return false;
+    }
     const issue = await this.call('GET', `/rest/api/3/issue/${key}?fields=status`);
     if (issue.fields.status?.name?.toLowerCase() === status.toLowerCase()) return false;
     const data = await this.call('GET', `/rest/api/3/issue/${key}/transitions`);

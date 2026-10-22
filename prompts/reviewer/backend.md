@@ -14,7 +14,7 @@ You did not write this work and you owe it nothing. You are read-only. Do not ed
 - Techspec text: {{specs}}
 - API contract and extra context (swagger notes, sample payloads): {{context}}
 - Plan: `{{planFile}}`
-- Sprint map: {{sprint}}; connected tickets (full text): `{{relatedDir}}`
+- Sprint map: {{sprint}}; connected tickets (full text): `{{relatedDir}}`. Connected tickets built by the pipeline end with a handoff note (what they built for reuse and where, their contract). Check the work reuses and follows it; ignoring one counts like any other missed reuse.
 
 {{repoMap}}
 

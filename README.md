@@ -21,12 +21,12 @@ agent run SCRUM-123
                Reviewer Agent (a different model) challenges it; they go back and forth until agreement
                recon first: what the sources settle becomes facts with their source; then the Dev Agent
                grills itself on what's still open and logs each decision (question, options, recommended,
-               chosen, why) in decisions.md; the few worth a second look go in the MR; only extreme
+               chosen, why) in decisions.md, all of which go in the MR, folded; only extreme
                blockers go to a human
   chunks       for each chunk: Dev codes → orchestrator runs gates → Reviewer reviews the diff
                → Dev accepts/rejects each finding with evidence → … → one atomic commit
-  final        full test suite + build vs baseline, whole-ticket audit, simplify pass, handoff
-  publish      push, one MR per repo (linked to each other), Jira → Code Review with MR links and QA curls
+  final        full test suite + build vs baseline, whole-ticket audit, simplify pass, write-up
+  publish      push, one MR per repo, Jira → Code Review with MR links, QA curls and the handoff note
   after MR     agent watch: lead's MR comments and QA comments on Jira → fix, re-review, push, reply
                conflicts → rebase and resolve; all MRs merged → Jira → Ready For Test
 ```
@@ -93,7 +93,7 @@ agent run SCRUM-561 --base SCRUM-560                    # force building on anot
 
 While a bot works, one line under the current step shows how long it has been running and what it is doing right now (reading a file, running tests, thinking, writing its answer). To read a bot's whole conversation, `agent session <KEY>` prints a command that opens a safe copy of it.
 
-If the bot hits a real blocker while you're at the terminal, it shows the question there with its recommendation. Press Enter to take the recommendation, type your own answer, or type `later` to post it on the Jira card instead. Under `agent watch` questions always go to Jira; answer with a comment on the card or with `agent answer`.
+Every question is asked at the terminal first, so whoever runs the pipeline can answer it. A real blocker shows its recommendation: press Enter to take it or type your own answer. A missing design: drop the files in `runs/<KEY>/1-input/design/` and press Enter, or type `continue without design`. A parent ticket with no branch yet: type `build on <KEY>` or `develop`. Type `later` to post the question on the Jira card instead. Under `agent watch` questions always go to Jira; answer with a comment on the card or with `agent answer`.
 
 `agent run` always continues from where a run stopped. If something breaks (VPN drop, model limit), fix the cause and run the same command again.
 
@@ -147,6 +147,10 @@ Gaps the runs found and that are now fixed:
 
 Every run fetches the ticket's sprint and epic from Jira into `sprints/<sprint>.md`, and saves the full text of connected tickets (Jira links, mentioned keys, same feature) into the run. The dev bot reads them while planning, and fetches more itself if needed. If the ticket needs another ticket's **unmerged code** (e.g. Edit reusing Add's form), the branch starts on that ticket's branch, and the MR says to merge the other one first. Before every MR, an **alignment check** compares the work with the connected tickets (contracts, shared code, the parent's review fixes) and fixes small mismatches.
 
+## Trial runs on a live ticket: `--simulate`
+
+`agent run SCRUM-561 --simulate` runs the whole pipeline on a real ticket without touching its Jira card. It still reads the ticket, attachments and connected tickets, but never moves the card, comments or tags anyone; each of those is written to `runs/SCRUM-561/would-post.md` instead, so you can see exactly what a real run would post. Branches get their own name, `scrum-561-simulated` (then `-2`, `-3`… if an earlier simulation left that branch), so a simulation never touches a real developer's branch or MR, and other tickets never build on it. MRs are opened as drafts with no reviewers assigned; replies on them only reach you and anyone who comments there. The run remembers it: resuming it, or `agent watch`, stays a simulation. `--simulate` can be added to a run that hasn't created its branches yet; once it has, start a fresh simulation instead (`agent clean <KEY>`, delete `runs/<KEY>`, run again with `--simulate`). Questions are asked at the terminal as usual.
+
 ## Answering the grill yourself: `--ask`
 
 By default the Dev Agent answers its own grill: every decision recon left open is settled by the agent and logged in `decisions.md` with its options, recommendation, choice and why. With `agent run SCRUM-561 --ask` it asks you instead. Recon and the grill come first, then you answer, and only then is the plan written, built on your answers. One question at a time:
@@ -164,12 +168,12 @@ Your answer [Enter = recommended · a/b/c · your own words · auto · auto all]
 
 Enter takes the recommendation, a letter picks an option, anything else is your own answer. `auto` leaves that one to the agent, `auto all` the rest. If you choose differently from the recommendation and that opens a decision the sources can't settle, it comes to you as a follow-up, still before the plan; `limits.grill_rounds` (default 3) caps the follow-up rounds, after which the agent decides and notes it would have asked you. After the grill, plan review settles new decisions from the sources and your answers, and asks you only when nothing can settle one (only with `--ask`; without it, the agent takes its recommendation and logs it). Coding never asks. Hard blockers that only the PM or tech lead can answer still go to them on Jira, in both modes.
 
-The reviewer checks your decisions too. If it thinks one is wrong, it doesn't go to the Dev Agent: you see its evidence and keep yours (Enter), switch to another option, or give your own answer. A decision you keep is logged as "kept despite the reviewer" and not raised again. Questions are only asked at the terminal and never go to Jira. When nobody is at one (`agent watch`, output to a file), the run stops with "grill questions waiting: run `agent run <KEY>`" and you answer them there. Each decision in `decisions.md` and the plan says **Decided by: you** or **the agent**. `--ask` also works on a run in progress, from its next grill on.
+The reviewer checks your decisions too. If it thinks one is wrong, it doesn't go to the Dev Agent: you see its evidence and keep yours (Enter), switch to another option, or give your own answer. A decision you keep shows on that decision as "you decided; the reviewer challenged it and you kept it", and isn't raised again. Questions are only asked at the terminal and never go to Jira. When nobody is at one (`agent watch`, output to a file), the run stops with "grill questions waiting: run `agent run <KEY>`" and you answer them there. Each decision in `decisions.md` and the plan says **Decided by: you** or **the agent**. `--ask` also works on a run in progress, from its next grill on.
 
 ## Sprint plan, handoff notes and your brief
 
 - **Sprint day:** run `agent sprint-plan` once. The AI reads the whole sprint and writes a local report covering dependencies, start order, FE/BE pairs, collision risks, what to build reusably, and unclear tickets for the tech lead. Every run in that sprint reads the parts about its own ticket.
-- **Handoff notes:** when a ticket's MR is prepared, it leaves a short note for later tickets (`runs/<KEY>/handoff-note.md`, also in the MR). Connected tickets read it when they start.
+- **Handoff notes:** when a ticket's MR opens, its note for connected tickets (what it built for reuse and where, its contract, gotchas) is posted as its own comment on the Jira card, with a copy in `runs/<KEY>/handoff-note.md`. Connected tickets' runs read it from the card, on any laptop.
 - **Your brief:** if you write a prompt for a ticket (`runs/<KEY>/1-input/brief.md`, or your usual `.claude/<number>/<number>-prompt.md`), both bots follow its technical guidance first.
 
 ## QA questions
@@ -186,7 +190,7 @@ QA asks the developer a question by starting a Jira comment on the card with `QA
         - src/middlewares/validateSchema.js
   ```
 - **Repo notes:** if a repo has its own `CLAUDE.md`, `.claude/CLAUDE.md` or `AGENTS.md`, both bots get it (today only WS1 has one). Our safety rules win where they clash.
-- **Deploy notes (BE only):** new or removed env vars in `.env.example`, env vars the new code reads that `.env.example` is missing, new migrations or seeders, and the deploy order when a ticket spans BE repos. Shown in the MR under "Deploying" and posted on Jira when the MRs merge; nothing when there's nothing to do.
+- **Deploy notes (BE only):** new or removed env vars in `.env.example`, env vars the new code reads that `.env.example` is missing, new migrations or seeders, and the deploy order when a ticket spans BE repos. Shown in the MR as one short "Deploy" line and posted on Jira when the MRs merge; nothing when there's nothing to do.
 
 ## VPN
 
@@ -224,7 +228,8 @@ One folder per ticket. Open its `README.md` first: where the ticket stands and w
 ```
 runs/SCRUM-561/
   README.md          where it stands, MR links, what to read first
-  decisions.md       every call made without asking, and why
+  decisions.md       what-to-build decisions (grill, gap assumptions, blocker answers, questions settled
+                     without the PM or lead, a UI built without the design) with options and why
   questions.md       what it asked, and what it's waiting on
   impact.md          what this ticket affects elsewhere
   handoff-note.md    the note later tickets read

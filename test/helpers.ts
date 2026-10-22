@@ -116,17 +116,10 @@ export const work = (summary = 'add feature', responses: unknown[] = []) => ({
   responses,
 });
 
-export const handoff = {
-  mr_summary_md: 'summary',
-  decisions: [{ decision: 'Reused the existing helper', why: 'it already does this' }],
-  testing_md: 'tests',
-  risks_md: 'none',
-  review_guide: [{ file: 'a.ts', what: 'guide' }],
+export const writeUp = {
   changes: [],
   qa_curls: [],
-  manual_checks: [],
-  jira_summary: 'done',
-  next_tickets_md: 'Built feature.js; reuse it.',
+  handoff_note: 'Built feature.js; reuse it.',
 };
 
 export function wt(call: AgentCall): string {

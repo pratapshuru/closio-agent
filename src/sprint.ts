@@ -47,6 +47,8 @@ export function sameFeature(a: string, b: string): boolean {
 
 // branch names like scrum-560, SCRUM-560, feature/scrum-560-add, but not scrum-5600
 export function branchMatches(branch: string, key: string): boolean {
+  // a simulation's branch is never a ticket's real code
+  if (/-simulated(-\d+)?$/i.test(branch)) return false;
   const escaped = key.toLowerCase().replace(/[-]/g, '\\-');
   return new RegExp(`(^|[/_.-])${escaped}($|[/_.-])`).test(branch.toLowerCase()) || branch.toLowerCase() === key.toLowerCase();
 }
@@ -108,11 +110,30 @@ export function handoffFile(config: Config, key: string): string {
   return path.join(runDir(config, key), 'handoff-note.md');
 }
 
-// a connected ticket as the dev bot reads it: the ticket, where its code is, and its run's handoff note
+// the handoff note's comment on a Jira card starts with this, so any laptop's run can find it
+const HANDOFF_TITLE = 'Handoff for connected tickets';
+export const HANDOFF_HEADING = `**${HANDOFF_TITLE}**`;
+
+// a ticket with its newest comments, so its handoff note is found however long the thread is
+export async function issueWithLatestComments(jira: Jira, key: string): Promise<JiraIssue> {
+  const issue = await jira.getIssue(key);
+  issue.comments = await jira.comments(key).catch(() => issue.comments);
+  return issue;
+}
+
+// a ticket's handoff note: the newest one posted on its card, else the copy its run left on this laptop
+function handoffNote(config: Config, issue: JiraIssue): string {
+  const posted = [...issue.comments].reverse().find((c) => c.text.includes(HANDOFF_TITLE));
+  if (posted) return posted.text.replace(`**${HANDOFF_TITLE}**`, '').replace(HANDOFF_TITLE, '').replace(/_?\[closio-agent\]_?/g, '').trim();
+  const note = handoffFile(config, issue.key);
+  return fs.existsSync(note) ? fs.readFileSync(note, 'utf8') : '';
+}
+
+// a connected ticket as the dev bot reads it: the ticket, where its code is, and its handoff note
 export function relatedText(config: Config, issue: JiraIssue, where: TicketBranch[] = []): string {
   const code = where.length ? where.map((b) => `- ${b.repo}: branch \`${b.branch}\`${b.mr ? `, MR ${b.mr}` : ''}`).join('\n') : '- no branch known';
-  const note = handoffFile(config, issue.key);
-  const handoff = fs.existsSync(note) ? `\n\n## Handoff note from ${issue.key}'s run (written for tickets like this one)\n\n${fs.readFileSync(note, 'utf8')}` : '';
+  const note = handoffNote(config, issue);
+  const handoff = note ? `\n\n## Handoff note from ${issue.key} (written for tickets like this one)\n\n${note}` : '';
   return `${ticketMarkdown(issue)}\n\n## Code\n\n${code}${handoff}\n`;
 }
 
@@ -157,7 +178,7 @@ export async function buildSprintContext(opts: {
   if (jira) {
     for (const k of related) {
       try {
-        writeText(path.join(relatedDir, `${k}.md`), relatedText(config, await jira.getIssue(k), branches.get(k) ?? []));
+        writeText(path.join(relatedDir, `${k}.md`), relatedText(config, await issueWithLatestComments(jira, k), branches.get(k) ?? []));
       } catch (err) {
         log(`  could not fetch ${k}: ${(err as Error).message.split('\n')[0]}`);
       }

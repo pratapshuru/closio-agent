@@ -107,9 +107,9 @@ describe('safety and config', () => {
     expect(run.inferRepos('# anything', ['repo:other'])).toEqual(['other']);
   });
 
-  it('strips echoed schema tags from handoff text but keeps html', () => {
+  it('strips echoed schema tags from write-up text but keeps html', () => {
     expect(stripFieldTags('Fixed it.</jira_summary>')).toBe('Fixed it.');
-    expect(stripFieldTags('<mr_summary_md>ok <b>bold</b></mr_summary_md>')).toBe('ok <b>bold</b>');
+    expect(stripFieldTags('<handoff_note>ok <b>bold</b></handoff_note>')).toBe('ok <b>bold</b>');
   });
 
   it('finds figma links in ticket text', () => {
