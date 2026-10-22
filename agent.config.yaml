@@ -189,16 +189,12 @@ limits:
   feedback_rounds: 2
 
 # Where the pipeline finds design material when Figma MCP is not available.
-# Checked per ticket: figma/<KEY>/ here, then the frontend repo's .claude/<KEY>/ and .claude/<number>/
+# Checked per ticket: runs/<KEY>/1-input/design/, then the frontend repo's .claude/<KEY>/ and .claude/<number>/
 # (their figma/ subfolder if present). Screenshots, CSS dumps and md files listing image paths all work.
 design:
-  folder: figma
   legacy_folders: true
   legacy_number_projects: [SCRUM]
 
 workspace:
   runs_dir: runs
-  worktrees_dir: worktrees
   sprints_dir: sprints
-  handoffs_dir: handoffs
-  briefs_dir: briefs

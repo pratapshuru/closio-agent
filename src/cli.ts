@@ -205,7 +205,7 @@ async function doctor(config: Config): Promise<number> {
   const figma = await figmaMcpStatus();
   if (figma === 'connected') console.log('✓ figma mcp: connected');
   else if (figma === 'needs_auth') console.log('⚠ figma mcp (optional): needs login. Run claude, type /mcp, choose figma');
-  else console.log('⚠ figma mcp (optional): not set up. claude mcp add --scope user --transport http figma https://mcp.figma.com/mcp, then /mcp in claude to log in. Without it, drop design files in figma/<KEY>/');
+  else console.log('⚠ figma mcp (optional): not set up. claude mcp add --scope user --transport http figma https://mcp.figma.com/mcp, then /mcp in claude to log in. Without it, drop design files in runs/<KEY>/1-input/design/');
   return bad ? 1 : 0;
 }
 

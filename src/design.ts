@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { Config } from './config.ts';
 import { resolvePath } from './config.ts';
 import { figmaLinks } from './ingest.ts';
+import { runDir } from './state.ts';
 import { ensureDir, exec, render, TOOL_ROOT, writeText } from './util.ts';
 
 export type McpStatus = 'connected' | 'needs_auth' | 'missing';
@@ -36,10 +37,15 @@ export async function figmaMcpStatus(): Promise<McpStatus> {
   return /connected/i.test(line) && !/needs|fail/i.test(line) ? 'connected' : 'needs_auth';
 }
 
+// where the developer drops screenshots and CSS dumps for a ticket
+export function designDropDir(config: Config, key: string): string {
+  return path.join(runDir(config, key), '1-input', 'design');
+}
+
 // the developer's own per-ticket prompt or brief, if they wrote one
 export function findBrief(config: Config, key: string): string | undefined {
-  const team = path.join(resolvePath(config.workspace.briefs_dir), `${key}.md`);
-  if (fs.existsSync(team)) return team;
+  const own = path.join(runDir(config, key), '1-input', 'brief.md');
+  if (fs.existsSync(own)) return own;
   const number = key.match(/-(\d+)$/)?.[1];
   const numbered = number && config.design.legacy_number_projects.some((p) => key.startsWith(`${p}-`));
   for (const repo of Object.values(config.repos)) {
@@ -61,7 +67,7 @@ export function findDesignFolders(config: Config, key: string): string[] {
     const pick = fs.existsSync(figmaSub) && fs.statSync(figmaSub).isDirectory() ? figmaSub : dir;
     if (fs.existsSync(pick) && fs.statSync(pick).isDirectory() && !found.includes(pick)) found.push(pick);
   };
-  add(path.join(resolvePath(config.design.folder), key));
+  add(designDropDir(config, key));
   if (config.design.legacy_folders) {
     const number = key.match(/-(\d+)$/)?.[1];
     const numbered = number && config.design.legacy_number_projects.some((p) => key.startsWith(`${p}-`));
@@ -106,9 +112,9 @@ function savedFiles(mcpDir: string): string[] {
   return listFiles(mcpDir).filter((f) => DOC.test(f));
 }
 
-export async function prepareDesign(config: Config, key: string, runDir: string, ticketText: string, skipped: boolean): Promise<Design> {
+export async function prepareDesign(config: Config, key: string, inputsDir: string, ticketText: string, skipped: boolean): Promise<Design> {
   const links = figmaLinks(ticketText);
-  const mcpDir = ensureDir(path.join(runDir, 'inputs', 'figma', 'mcp'));
+  const mcpDir = ensureDir(path.join(inputsDir, 'figma', 'mcp'));
   const folders = findDesignFolders(config, key);
   const { docs, images } = collectDesignFiles(folders);
   const saved = savedFiles(mcpDir);
@@ -125,7 +131,7 @@ export async function prepareDesign(config: Config, key: string, runDir: string,
   else mode = 'unavailable';
 
   const design: Design = { mode, links, folders, docs: [...docs, ...saved], images, mcpDir, mcp };
-  writeText(path.join(runDir, 'inputs', 'figma.md'), designBrief(design));
+  writeText(path.join(inputsDir, 'figma.md'), designBrief(design));
   return design;
 }
 

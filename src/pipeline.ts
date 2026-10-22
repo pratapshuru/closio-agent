@@ -5,17 +5,17 @@ import { z } from 'zod';
 import type { Config, Repo, Role } from './config.ts';
 import { repoPath, resolveModels, resolvePath } from './config.ts';
 import * as g from './git.ts';
-import { designWaitMessage, FIGMA_TOOLS, findBrief, findDesignFolders, prepareDesign } from './design.ts';
+import { designDropDir, designWaitMessage, FIGMA_TOOLS, findBrief, findDesignFolders, prepareDesign } from './design.ts';
 import { computeBaseline, gateFailureDetail, gateReport, gatesOk, runGates, type Baseline, type GateResult } from './gates.ts';
 import { GitLab } from './gitlab.ts';
 import { buildInputs, ticketMarkdown } from './ingest.ts';
 import { isOurComment, Jira } from './jira.ts';
 import { AgentError, claudeSessionFile, runAgent, type Access } from './providers.ts';
 import * as S from './schemas.ts';
-import { buildSprintContext, findBranches, handoffFile, mentionedKeys, relatedText, type TicketBranch } from './sprint.ts';
+import { buildSprintContext, findBranches, mentionedKeys, relatedText, type TicketBranch } from './sprint.ts';
 import { adviceFor } from './sprintplan.ts';
 import { isMergedInto, ownSubjects, resolveRef, startOn, startRestack, verifyRestack } from './stack.ts';
-import { hasRun, listRuns, loadState, runDir, saveState, totals, worktreesDir, type Phase, type RunState } from './state.ts';
+import { hasRun, listRuns, loadState, runDir, saveState, scratchDir, totals, type Phase, type RunState } from './state.ts';
 import { ensureDir, exec, fill, log, now, PipelineStop, readJson, render, TOOL_ROOT, writeJson, writeText } from './util.ts';
 
 export type StartOptions = {
@@ -129,10 +129,62 @@ export class Run {
 
   save(): void {
     saveState(this.config, this.state);
+    this.writeReadme();
   }
 
   file(...parts: string[]): string {
-    return path.join(this.dir, ...parts);
+    return path.join(this.dir, ...this.place(parts));
+  }
+
+  // where each kind of file goes in the per-ticket folder
+  private place(parts: string[]): string[] {
+    const [first, ...rest] = parts;
+    const name = rest.at(-1) ?? '';
+    if (first === 'inputs') return ['1-input', ...rest];
+    if (first === 'plan.md') return ['2-plan', first];
+    if (first === 'reviews') return [this.stage(name), name];
+    if (first === 'gates') {
+      if (rest[0]?.startsWith('baseline-')) return ['.agent', 'baselines', ...rest];
+      // a step's results sit with its review; the raw tool output stays hidden
+      return rest.length >= 2 ? [this.stage(name), 'tests', ...rest] : ['.agent', 'gates', ...rest];
+    }
+    if (first === 'deployment.md' || first.startsWith('mr-')) return ['4-mr', first];
+    if (['logs', 'chunks', 'steps', 'score', 'plan.json', 'handoff.json'].includes(first)) return ['.agent', first, ...rest];
+    return parts;
+  }
+
+  // which stage a review or test result belongs to, from its name
+  private stage(name: string): string {
+    const chunks = this.state.plan?.chunks ?? [];
+    const chunk = [...chunks].sort((a, b) => b.id.length - a.id.length).find((c) => name.startsWith(`chunk-${c.id}-`));
+    if (chunk) return path.join('3-build', `chunk-${chunks.indexOf(chunk) + 1}-${chunk.id}`);
+    if (name.startsWith('plan')) return '2-plan';
+    if (/^(feedback|rebase|restack)/.test(name)) return '5-after-mr';
+    return path.join('3-build', 'final');
+  }
+
+  // the ticket folder's front page: where it stands and what to open first
+  private writeReadme(): void {
+    const s = this.state;
+    const rel = (f: string) => path.relative(this.dir, f);
+    const have = (f: string) => fs.existsSync(f);
+    const repos = Object.values(s.repos).map((r) => `- ${r.key}: branch \`${r.branch}\`${r.mr ? `, MR ${r.mr.url}` : ''}`);
+    const read = [
+      [this.file('questions.md'), s.questions.pending.length ? 'waiting on these answers' : 'questions asked so far'],
+      [this.file('decisions.md'), 'every call made without asking, and why'],
+      [this.file('plan.md'), 'the plan'],
+      [this.file('impact.md'), 'what this ticket affects elsewhere'],
+      [this.file('handoff-note.md'), 'the note later tickets read'],
+      ...Object.keys(s.repos).map((k) => [this.file(`mr-${k}.md`), `MR text for ${k}`]),
+      [this.file('deployment.md'), 'deploy notes'],
+    ].filter(([f]) => have(f)).map(([f, what]) => `- [${rel(f)}](${rel(f)}): ${what}`);
+    writeText(path.join(this.dir, 'README.md'), [
+      `# ${s.key}: ${s.summary || 'starting'}`,
+      `Stage: **${s.phase}**${s.waitingFor ? ` (waiting for ${s.waitingFor})` : ''}. Updated ${new Date(s.updatedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })}.`,
+      repos.length ? `## Code\n\n${repos.join('\n')}\n\nThe ticket's own copies of the repos are in \`code/\`.` : '',
+      read.length ? `## Read first\n\n${read.join('\n')}` : '',
+      '## Folders\n\n- `1-input/`: the ticket, spec, design, your brief, connected tickets\n- `2-plan/`: the plan and its reviews\n- `3-build/`: one folder per chunk (reviews and test results), then `final/`\n- `4-mr/`: MR text and deploy notes\n- `5-after-mr/`: review feedback and rebases\n- `code/`: the ticket\'s copies of the repos\n- `.agent/`: machine files: state, raw answers, logs',
+    ].filter(Boolean).join('\n\n'));
   }
 
   get jira(): Jira {
@@ -155,7 +207,7 @@ export class Run {
   }
 
   get root(): string {
-    return ensureDir(path.join(worktreesDir(this.config), this.state.key));
+    return ensureDir(path.join(this.dir, 'code'));
   }
 
   private repoCfg(key: string): Repo {
@@ -181,8 +233,25 @@ export class Run {
   }
 
   // the team's own notes for a repo, if it has any; our safety rules still win
-  private conventions(keys: string[]): { text: string; keys: string[] } {
+  // what a session still needs: the FE and/or BE base prompt for the sides this ticket touches, then each repo's own notes
+  private unsent(seen: string[]): string[] {
+    const repos = Object.keys(this.state.repos);
+    const sides = [...new Set(repos.map((k) => (this.repoCfg(k).kind === 'frontend' ? 'side:frontend' : 'side:backend')))];
+    return [...sides, ...repos].filter((k) => !seen.includes(k));
+  }
+
+  private conventions(keys: string[], role: Role): { text: string; keys: string[] } {
     const parts: string[] = [];
+    for (const side of ['frontend', 'backend']) {
+      if (!keys.includes(`side:${side}`)) continue;
+      parts.push(render(prompt(`${role === 'reviewer' ? 'reviewer' : 'dev'}/${side}`), {
+        ...this.sourceVars(),
+        jiraHelper: path.join(TOOL_ROOT, 'bin', 'agent-jira'),
+        sqlHelper: path.join(TOOL_ROOT, 'bin', 'agent-sql'),
+        databases: databaseList(),
+        planFile: this.file('plan.md'),
+      }).trim());
+    }
     for (const key of keys) {
       const repo = this.state.repos[key];
       if (!repo) continue;
@@ -210,11 +279,11 @@ export class Run {
     // a bug ticket's first dev and reviewer calls start from copies of its story's conversations
     const pr = this.state.parentRun;
     const forkFrom = resume || !pr ? undefined : role === 'dev' ? pr.devFork : role === 'reviewer' ? pr.reviewerFork : undefined;
-    // each session gets a repo's own CLAUDE.md/AGENTS.md once, the first time it works with that repo
+    // each session gets the FE/BE rules and a repo's own CLAUDE.md/AGENTS.md once, the first time it works on that side or repo
     const sent = (this.state.conventionsSent ??= {});
     const keyed = role === 'dev' || role === 'reviewer' ? role : null;
     const seen = keyed && resume ? (sent[keyed] ?? []) : [];
-    const notes = this.conventions(Object.keys(this.state.repos).filter((k) => !seen.includes(k)));
+    const notes = this.conventions(this.unsent(seen), role);
     if (notes.text) text = `${notes.text}\n\n${text}`;
     // Figma MCP is configured in Claude; codex cannot use it
     const figma = this.state.design?.mcp === 'connected' && model.provider !== 'codex' && ['mcp', 'folder', 'saved'].includes(this.state.design.mode);
@@ -233,7 +302,7 @@ export class Run {
       schema: S.jsonSchema(schema),
       images: role === 'dev' || role === 'reviewer' ? [...(this.state.inputs?.images ?? []), ...(this.state.design?.images ?? [])] : [],
       timeoutMs: this.config.limits.agent_timeout_min * 60_000,
-      logDir: this.file('logs'),
+      logDir: this.file('logs', step),
     };
     for (let attempt = 1; ; attempt++) {
       const stepName = attempt === 1 ? step : `${step}-retry${attempt - 1}`;
@@ -265,7 +334,7 @@ export class Run {
         if (attempt >= 2 || !(err instanceof AgentError || err instanceof z.ZodError)) throw err;
         // a lost reviewer session is not worth failing over; the retry starts a fresh reviewer
         if (role === 'reviewer' && resume) {
-          const all = this.conventions(Object.keys(this.state.repos));
+          const all = this.conventions(this.unsent([]), role);
           base.prompt = this.withFullReviewerRules(all.text ? `${all.text}\n\n${text.replace(notes.text, '').trimStart()}` : text);
           notes.keys = all.keys;
           resume = undefined;
@@ -331,12 +400,20 @@ export class Run {
     };
   }
 
+  private designStep(): string {
+    const ui = Object.keys(this.state.repos).some((k) => this.repoCfg(k).kind === 'frontend');
+    return ui
+      ? `Read the design brief \`${this.state.inputs!.figma}\` before anything else and do what it says: use the developer's files, the saved Figma files, or fetch through Figma MCP. Set \`design_status\` to match.`
+      : 'This ticket has no frontend work, so set `design_status` to `not_needed`.';
+  }
+
+  // the FE/BE base prompt itself reaches each session once, ahead of the step (see conventions); steps only add the decisions so far
   private devRules(): string {
-    return render(prompt('dev-rules'), { ...this.sourceVars(), sqlHelper: path.join(TOOL_ROOT, 'bin', 'agent-sql'), jiraHelper: path.join(TOOL_ROOT, 'bin', 'agent-jira'), databases: databaseList() }) + '\n\n' + this.decisions();
+    return this.decisions();
   }
 
   private fullReviewerRules(): string {
-    return render(prompt('reviewer-rules'), { ...this.sourceVars(), planFile: this.file('plan.md') }) + '\n\n' + this.decisions();
+    return [`The plan is at \`${this.file('plan.md')}\`.`, this.decisions()].filter(Boolean).join('\n\n');
   }
 
   // the ticket's reviewer already has the rules from its first review; later reviews only remind it
@@ -599,7 +676,7 @@ export class Run {
     this.state.issueType = issue?.type ?? (/type:\s*bug/i.test(ticketText) ? 'Bug' : undefined);
     this.state.reporterId = issue?.reporterId;
     if (!opts.fresh && (opts.parent || /bug/i.test(this.state.issueType ?? ''))) this.findParentRun(opts.parent, issue?.epic, issue?.links ?? [], ticketText);
-    const inputs = await buildInputs({ runDir: this.dir, ticketText, issue, jira: issue ? this.jira : undefined, specs: opts.specs, contexts: opts.contexts });
+    const inputs = await buildInputs({ dir: this.file('inputs'), ticketText, issue, jira: issue ? this.jira : undefined, specs: opts.specs, contexts: opts.contexts });
     this.state.inputs = { ticket: inputs.ticket, specs: inputs.specs, context: inputs.context, figma: path.join(inputs.dir, 'figma.md'), images: inputs.images };
 
     // a bug ticket moves only once it's confirmed; a "not a bug" leaves the card as QA left it
@@ -607,7 +684,7 @@ export class Run {
     const brief = findBrief(this.config, this.state.key);
     if (brief) {
       this.state.inputs.brief = path.join(inputs.dir, 'brief.md');
-      fs.copyFileSync(brief, this.state.inputs.brief);
+      if (path.resolve(brief) !== path.resolve(this.state.inputs.brief)) fs.copyFileSync(brief, this.state.inputs.brief);
       log(`  developer's brief: ${brief}`);
     }
     const sprintName = issue?.sprints.find((x) => x.state === 'active')?.name ?? issue?.sprints.at(-1)?.name;
@@ -747,7 +824,7 @@ export class Run {
     let devFork = p.devSession!.provider === dev.provider ? p.devSession!.id : undefined;
     // Claude finds conversations by working folder: copy the story's into this run's folder so the bug run works from its own
     if (devFork && dev.provider === 'claude') {
-      const from = claudeSessionFile(path.join(worktreesDir(this.config), key), devFork);
+      const from = claudeSessionFile(Run.load(this.config, key).root, devFork);
       if (fs.existsSync(from)) {
         const to = claudeSessionFile(this.root, devFork);
         ensureDir(path.dirname(to));
@@ -768,7 +845,7 @@ export class Run {
 
   private async prepareDesign(): Promise<void> {
     const ticketText = fs.readFileSync(this.state.inputs!.ticket, 'utf8');
-    const design = await prepareDesign(this.config, this.state.key, this.dir, ticketText, Boolean(this.state.designSkipped));
+    const design = await prepareDesign(this.config, this.state.key, this.file('inputs'), ticketText, Boolean(this.state.designSkipped));
     this.state.design = design;
     log(`  design: ${design.mode}${design.links.length ? ` (${design.links.length} Figma link(s), MCP ${design.mcp})` : ''}`);
     if (design.mode === 'skipped') {
@@ -840,7 +917,7 @@ export class Run {
   }
 
   private async waitForDesign(): Promise<never> {
-    const folder = ensureDir(path.join(resolvePath(this.config.design.folder), this.state.key));
+    const folder = ensureDir(designDropDir(this.config, this.state.key));
     // the plan is redone with the design, in the same dev session
     this.state.plan = undefined;
     return this.pause('design', designWaitMessage(this.state.key, folder, this.state.design?.mcp ?? 'missing'), 'planning', `Waiting for design files in ${folder} (or "continue without design").`);
@@ -851,7 +928,7 @@ export class Run {
     if (this.state.parentRun && !this.state.bugTriage && !(await this.confirmBug())) return;
     if (this.state.parentRun && !this.state.parentRun.merged && !this.state.baseOverride && !this.state.skipDependencies) await this.askWhereBugGoes();
     if (!this.state.plan) await this.prepareDesign();
-    let plan = this.state.plan ?? (await this.call('dev', 'plan', render(prompt('plan'), { rules: this.devRules(), figma: this.state.inputs!.figma }), S.Plan, 'read'));
+    let plan = this.state.plan ?? (await this.call('dev', 'plan', render(prompt('plan'), { rules: this.devRules(), design: this.designStep() }), S.Plan, 'read'));
     if (plan.design_status === 'unavailable' && this.state.design?.mode === 'mcp') {
       log('  Figma MCP failed during planning');
       if (this.state.design) this.state.design.mode = 'unavailable';
@@ -925,7 +1002,7 @@ export class Run {
       if (!folders.length && !skip) {
         this.state.questions.inbox = [];
         this.save();
-        throw new PipelineStop('waiting', `Still waiting for design files in ${path.join(resolvePath(this.config.design.folder), this.state.key)} (or "continue without design").`);
+        throw new PipelineStop('waiting', `Still waiting for design files in ${designDropDir(this.config, this.state.key)} (or "continue without design").`);
       }
       this.state.designSkipped = !folders.length;
       log(folders.length ? `design files found in ${folders.join(', ')}` : 'continuing without design');
@@ -1435,7 +1512,7 @@ export class Run {
     if (this.state.deploy.length) writeText(this.file('deployment.md'), `# Deploy notes for ${this.state.key}\n\n${this.state.deploy.map((l) => `- ${l}`).join('\n')}`);
     this.state.changes = handoff.changes ?? [];
     if (this.state.changes.length || this.state.plan?.gaps?.length) await this.impact();
-    if (handoff.next_tickets_md.trim()) writeText(handoffFile(this.config, this.state.key), `# Handoff from ${this.state.key}: ${this.state.summary}\n\n${handoff.next_tickets_md}`);
+    if (handoff.next_tickets_md.trim()) writeText(this.file('handoff-note.md'), `# Handoff from ${this.state.key}: ${this.state.summary}\n\n${handoff.next_tickets_md}`);
     for (const key of Object.keys(this.state.repos)) writeText(this.file(`mr-${key}.md`), this.mrDescription(key, handoff));
     this.state.phase = this.state.publish ? 'publishing' : 'done';
     this.save();
@@ -1923,7 +2000,7 @@ export class Run {
   private async rebaseline(key: string, sha: string): Promise<Baseline> {
     const cache = path.join(this.dir, '..', '_baselines', `${key}-${sha}.json`);
     if (fs.existsSync(cache)) return readJson<Baseline>(cache);
-    const tmp = path.join(worktreesDir(this.config), '_baseline', `${key}-${sha.slice(0, 8)}`);
+    const tmp = path.join(scratchDir(this.config), 'baseline', `${key}-${sha.slice(0, 8)}`);
     const source = repoPath(this.config, key);
     await g.git(source, 'worktree', 'add', '--detach', tmp, sha);
     try {

@@ -4,7 +4,7 @@ import { repoPath } from './config.ts';
 import * as g from './git.ts';
 import { runGates } from './gates.ts';
 import type { Run } from './pipeline.ts';
-import { totals, worktreesDir } from './state.ts';
+import { scratchDir, totals } from './state.ts';
 import { exec, log, writeText } from './util.ts';
 
 const TEST_FILE = /(__tests__\/|\.test\.|\.spec\.|^test\/)/;
@@ -40,7 +40,7 @@ export async function scoreReplay(run: Run): Promise<string> {
   let hiddenSummary = 'No test files in the reference change.';
   let hiddenFailures: string[] = [];
   if (hidden.length) {
-    const tmp = path.join(worktreesDir(run.config), '_score', run.state.key);
+    const tmp = path.join(scratchDir(run.config), 'score', run.state.key);
     if (fs.existsSync(tmp)) await g.removeWorktree(source, tmp);
     await g.git(source, 'worktree', 'add', '--detach', tmp, await g.head(repo.worktree));
     try {

@@ -84,13 +84,12 @@ closio-agent/
   agent.local.yaml       per developer, never committed: repo paths on your laptop,
                          draft MRs while testing, default profile, VPN settings
   .env                   secrets, never committed: Jira and GitLab tokens, dev DB logins
-  prompts/               role rules, step templates, design variants
+  prompts/               FE and BE base prompts (dev/, reviewer/), step templates, design variants
   src/                   orchestrator, clients, checks, git, sprint logic
   bin/                   agent (CLI), agent-sql, agent-jira
-  runs/KEY/              everything about one ticket's run
-  worktrees/KEY/<repo>/  that ticket's own copies of each repo
-  sprints/  handoffs/  briefs/  figma/    sprint maps, notes for later tickets,
-                                          your briefs, design drop folders
+  runs/KEY/              everything about one ticket: inputs, plan, build,
+                         MR text, its code copies (code/), its handoff note
+  sprints/               sprint maps and sprint plans
 ```
 
 ### 3.4 Repos it knows
@@ -228,7 +227,7 @@ Prompts are Markdown templates in `prompts/` with `{{variables}}`. If any variab
 ```mermaid
 flowchart TB
   subgraph Once per conversation
-    R[Role rules<br/>how to work and decide]
+    R[FE or BE base prompt<br/>how to work and decide on this kind of ticket]
     S[Sources<br/>ticket, spec, brief, design, sprint map,<br/>connected tickets]
     M[Repo map<br/>worktrees, checks, protected files,<br/>databases it can read]
   end
@@ -244,6 +243,8 @@ flowchart TB
 ```
 
 The heavy context goes in once per conversation; later steps send only the task. This keeps steps fast and focused.
+
+The base prompt depends on the ticket. A backend ticket gets `prompts/dev/backend.md`: no design, but the BE ticket types (read endpoint, write endpoint, schema change, worker or job, WS1 route only, bug fix) and what the plan must cover for each, such as the error ladder, a table of where each response field comes from, migration safety and idempotency. A frontend ticket gets `prompts/dev/frontend.md`, with the design and the FE ticket types (list, detail, add or edit form, change to a screen, shared component, bug fix). A ticket touching both gets both. The reviewer gets the matching `prompts/reviewer/` base and checks the plan covers what its type needs.
 
 ### 6.2 What the rules say (how a bot decides)
 
@@ -277,18 +278,18 @@ If a repo has a `CLAUDE.md`, `.claude/CLAUDE.md` or `AGENTS.md` (WS1 has one, ab
 
 - **Ticket:** fetched from Jira REST v3. Jira's rich text (ADF) is converted to Markdown; stray tags are stripped.
 - **Techspec:** a PDF given with `--spec` is converted to text with `pdftotext`, keeping page markers. The bot is told to search it by section, not read 100 pages.
-- **Your brief:** picked up automatically from `briefs/KEY.md`, or from your existing `.claude/<number>/*prompt*.md` folders in the FE repo.
+- **Your brief:** picked up automatically from `runs/KEY/1-input/brief.md`, or from your existing `.claude/<number>/*prompt*.md` folders in the FE repo.
 - **Sprint advice:** if `agent sprint-plan` was run, this ticket's part of that report.
 - **Design:** see 7.2.
 - **Sprint map and connected tickets:** see section 8.
-- **Fresh code:** every configured repo's target branch is fetched from GitLab (so even the repos it only reads are current), then a separate copy (**git worktree**) of each repo the ticket touches is made under `worktrees/KEY/`. Your own checkout is never touched. `node_modules` is linked from your checkout instead of reinstalled, and hidden from git.
+- **Fresh code:** every configured repo's target branch is fetched from GitLab (so even the repos it only reads are current), then a separate copy (**git worktree**) of each repo the ticket touches is made under `runs/KEY/code/`. Your own checkout is never touched. `node_modules` is linked from your checkout instead of reinstalled, and hidden from git.
 - **Baseline:** the full test suite runs once on the starting code to record what already fails (see 7.5).
 
 ### 7.2 Design input (FE)
 
 Checked in order:
 
-1. **Your folder:** `figma/SCRUM-561/`, or your existing `.claude/<KEY>` / `.claude/<number>/figma` folders in the FE repo. Screenshot paths in Markdown notes are followed, including paths with spaces.
+1. **Your folder:** `runs/SCRUM-561/1-input/design/`, or your existing `.claude/<KEY>` / `.claude/<number>/figma` folders in the FE repo. Screenshot paths in Markdown notes are followed, including paths with spaces.
 2. **Saved files** from an earlier run of the same ticket.
 3. **Figma's official MCP server**, if the ticket links Figma. Set up once with `claude mcp add --scope user --transport http figma https://mcp.figma.com/mcp`, then `/mcp` in Claude to log in. Only the dev bot uses it, with four read tools (`get_design_context`, `get_screenshot`, `get_metadata`, `get_variable_defs`); what it fetches is saved so the reviewer sees the same design.
 4. **Nothing:** a UI ticket pauses and tells you exactly where to drop files, or you reply "continue without design" (noted in the MR).
@@ -356,7 +357,7 @@ flowchart TD
 2. **Whole-ticket audit** by the same reviewer, against the plan's done checklist: every acceptance criterion, states, edge cases, existing flows that must still work.
 3. **Cleanup pass:** a separate simplifier suggests behaviour-preserving cleanups; the dev applies them; checks and the reviewer must pass, otherwise the cleanup is discarded rather than argued about.
 4. **Alignment check** with connected tickets (8.2).
-5. **Handoff:** MR text, decisions, changes from the ticket, risks, testing summary, review guide per file, QA curls for API tickets, manual checks, Jira summary, notes for later tickets (saved to `handoffs/KEY.md`, read by the next ticket's run).
+5. **Handoff:** MR text, decisions, changes from the ticket, risks, testing summary, review guide per file, QA curls for API tickets, manual checks, Jira summary, notes for later tickets (saved to `runs/KEY/handoff-note.md`, read by the next ticket's run).
 6. **Deploy notes** (BE only, read from the diff, 7.7).
 7. **Impact check**, only if there were gaps or changes (section 9).
 
@@ -451,7 +452,7 @@ flowchart TD
 
 ### 8.5 Handoff notes for later tickets
 
-Each run writes a short note to `handoffs/KEY.md`: what this ticket built that others should reuse and exactly where (components, functions, endpoints and their contract), decisions, gotchas, review lessons, and what was left for upcoming tickets. Connected tickets' runs read it.
+Each run writes a short note to `runs/KEY/handoff-note.md`: what this ticket built that others should reuse and exactly where (components, functions, endpoints and their contract), decisions, gotchas, review lessons, and what was left for upcoming tickets. Connected tickets' runs read it.
 
 ---
 

@@ -9,7 +9,7 @@ export function sh(cwd: string, cmd: string): string {
   return execSync(cmd, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
-// a throwaway repo with one commit and a tool dir for runs/worktrees
+// a throwaway repo with one commit and a tool dir for runs
 export function sandbox() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'closio-agent-test-'));
   const repo = path.join(root, 'svc');
@@ -74,8 +74,8 @@ export function testConfig(root: string, repo: string): Config {
       profiles: { fake: { dev: { provider: 'fake' }, reviewer: { provider: 'fake' }, simplifier: { provider: 'fake' } } },
     },
     limits: { review_rounds: 3, gate_fix_attempts: 2, agent_timeout_min: 1, feedback_rounds: 2 },
-    design: { folder: path.join(root, 'figma'), legacy_folders: false, legacy_number_projects: ['SCRUM'] },
-    workspace: { runs_dir: path.join(root, 'runs'), worktrees_dir: path.join(root, 'worktrees'), sprints_dir: path.join(root, 'sprints'), handoffs_dir: path.join(root, 'handoffs'), briefs_dir: path.join(root, 'briefs') },
+    design: { legacy_folders: false, legacy_number_projects: ['SCRUM'] },
+    workspace: { runs_dir: path.join(root, 'runs'), sprints_dir: path.join(root, 'sprints') },
   };
 }
 

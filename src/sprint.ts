@@ -4,6 +4,7 @@ import type { Config } from './config.ts';
 import { repoPath, resolvePath } from './config.ts';
 import type { GitLab } from './gitlab.ts';
 import { ticketMarkdown } from './ingest.ts';
+import { runDir } from './state.ts';
 import type { Jira, JiraIssue, JiraSummary } from './jira.ts';
 import { ensureDir, exec, log, writeText } from './util.ts';
 
@@ -104,7 +105,7 @@ export function slug(text: string): string {
 }
 
 export function handoffFile(config: Config, key: string): string {
-  return path.join(resolvePath(config.workspace.handoffs_dir), `${key}.md`);
+  return path.join(runDir(config, key), 'handoff-note.md');
 }
 
 // a connected ticket as the dev bot reads it: the ticket, where its code is, and its run's handoff note

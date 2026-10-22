@@ -6,7 +6,7 @@ Every chunk was reviewed on its own. Your job is to catch what only shows up in 
 - acceptance criteria that no chunk fully delivered,
 - inconsistencies between chunks or between repos (for example the WS1 forwarding contract vs the WS2 handler, or the FE call vs the BE response),
 - convention drift compared with the most recent merged sibling features,
-- UI that does not match the design. Check layout, spacing, colours and components against the design files, and check **every UI text, word for word**, against `copy.md` or the layer dumps listed in the design brief: labels, buttons, toasts, dialogs, validation and error messages,
+- For frontend work, UI that does not match the design. Check layout, spacing, colours and components against the design files, and check **every UI text, word for word**, against `copy.md` or the layer dumps listed in the design brief: labels, buttons, toasts, dialogs, validation and error messages,
 - leftover debug code or temporary mocks,
 - comments that do not read as human.
 

@@ -8,6 +8,8 @@ import { approved, handoff, plan, sandbox, sandboxWithRemote, sh, testConfig, wo
 
 function start(root: string, repo: string, base: string, extra: Partial<StartOptions> = {}, ticketText = '# T-1 - add a feature\n\nBackend: add feature.js') {
   const config = testConfig(root, repo);
+  // UI tickets run against a frontend repo, so they get the frontend base and the design step
+  if (/frontend/i.test(ticketText)) config.repos.svc.kind = 'frontend';
   const ticket = path.join(root, 'ticket.md');
   fs.writeFileSync(ticket, ticketText);
   const opts: StartOptions = {
@@ -67,8 +69,8 @@ describe('pipeline', () => {
 
   it("writes a handoff note for later tickets and gives the developer's brief to both bots", async () => {
     const { root, repo, base } = sandbox();
-    fs.mkdirSync(path.join(root, 'briefs'));
-    fs.writeFileSync(path.join(root, 'briefs', 'T-1.md'), 'Reuse shared.js; Edit comes next.');
+    fs.mkdirSync(path.join(root, 'runs', 'T-1', '1-input'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'runs', 'T-1', '1-input', 'brief.md'), 'Reuse shared.js; Edit comes next.');
     commonFakes();
     const prompts: Record<string, string> = {};
     registerFake('plan', (call) => {
@@ -88,7 +90,7 @@ describe('pipeline', () => {
     await run.advance(opts);
     expect(prompts.plan).toContain(run.file('inputs', 'brief.md'));
     expect(prompts.review).toContain(run.file('inputs', 'brief.md'));
-    expect(fs.readFileSync(path.join(root, 'handoffs', 'T-1.md'), 'utf8')).toContain('Built feature.js; reuse it.');
+    expect(fs.readFileSync(path.join(root, 'runs', 'T-1', 'handoff-note.md'), 'utf8')).toContain('Built feature.js; reuse it.');
     expect(fs.readFileSync(run.file('mr-svc.md'), 'utf8')).toContain('Notes for related tickets');
   });
 
@@ -291,7 +293,7 @@ describe('pipeline', () => {
     await expect(run.advance(opts)).rejects.toBeInstanceOf(PipelineStop);
     expect(run.state.phase).toBe('awaiting_answers');
     expect(run.state.waitingFor).toBe('design');
-    const folder = path.join(root, 'figma', 'T-1');
+    const folder = path.join(root, 'runs', 'T-1', '1-input', 'design');
     expect(fs.readFileSync(run.file('questions.md'), 'utf8')).toContain(folder);
 
     // still nothing dropped: stays waiting

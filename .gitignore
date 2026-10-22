@@ -1,12 +1,7 @@
 node_modules/
 runs/
-worktrees/
 .env
 agent.local.yaml
-runs-*.log
 replays/*-files/
-figma/
 sprints/
-handoffs/
-briefs/
 notes/

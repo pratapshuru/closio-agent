@@ -61,7 +61,7 @@ claude mcp add --scope user --transport http figma https://mcp.figma.com/mcp
 
 Then run `claude`, type `/mcp`, choose **figma**, and log in in the browser. The dev bot then reads the screens linked in the ticket and saves them for the reviewer.
 
-Without Figma, drop screenshots and CSS dumps into `figma/<TICKET>/` in this folder. The pipeline also finds your old `.claude/<number>/figma/` folders in the frontend repo. If a UI ticket has neither, it pauses and tells you where to drop the files.
+Without Figma, drop screenshots and CSS dumps into `runs/<TICKET>/1-input/design/`. The pipeline also finds your old `.claude/<number>/figma/` folders in the frontend repo. If a UI ticket has neither, it pauses and tells you where to drop the files.
 
 For trial runs against real repos, put `gitlab: { mr: { draft: true } }` in `agent.local.yaml` so MRs open as Draft.
 
@@ -146,8 +146,8 @@ Every run fetches the ticket's sprint and epic from Jira into `sprints/<sprint>.
 ## Sprint plan, handoff notes and your brief
 
 - **Sprint day:** run `agent sprint-plan` once. The AI reads the whole sprint and writes a local report covering dependencies, start order, FE/BE pairs, collision risks, what to build reusably, and unclear tickets for the tech lead. Every run in that sprint reads the parts about its own ticket.
-- **Handoff notes:** when a ticket's MR is prepared, it leaves a short note for later tickets (`handoffs/<KEY>.md`, also in the MR). Connected tickets read it when they start.
-- **Your brief:** if you write a prompt for a ticket (`briefs/<KEY>.md`, or your usual `.claude/<number>/<number>-prompt.md`), both bots follow its technical guidance first.
+- **Handoff notes:** when a ticket's MR is prepared, it leaves a short note for later tickets (`runs/<KEY>/handoff-note.md`, also in the MR). Connected tickets read it when they start.
+- **Your brief:** if you write a prompt for a ticket (`runs/<KEY>/1-input/brief.md`, or your usual `.claude/<number>/<number>-prompt.md`), both bots follow its technical guidance first.
 
 ## QA questions
 
@@ -193,12 +193,28 @@ If IT renews the VPN server's certificate (the current one expires 2027-02-03), 
 | `agent.config.yaml` | team config: repos, gates, Jira statuses, model profiles | yes |
 | `prompts/` | every prompt the agents get; this is the team's shared skill set | yes |
 | `agent.local.yaml`, `.env` | your paths and secrets | no |
-| `runs/<KEY>/` | inputs, plan, reviews, gate results, logs, handoff, MR text, cost ledger | no |
-| `worktrees/<KEY>/<repo>` | the code the agent works on, one branch per ticket | no |
-| `sprints/` | one map per sprint, refreshed every run | no |
-| `figma/<KEY>/` | design files you drop for a ticket | no |
-| `briefs/<KEY>.md` | your optional brief for a ticket | no |
-| `handoffs/<KEY>.md` | notes finished tickets leave for later ones | no |
+| `runs/<KEY>/` | everything about one ticket (below) | no |
+| `sprints/` | one map per sprint, refreshed every run, plus the sprint plan | no |
+
+One folder per ticket. Open its `README.md` first: where the ticket stands and what to read.
+
+```
+runs/SCRUM-561/
+  README.md          where it stands, MR links, what to read first
+  decisions.md       every call made without asking, and why
+  questions.md       what it asked, and what it's waiting on
+  impact.md          what this ticket affects elsewhere
+  handoff-note.md    the note later tickets read
+  1-input/           ticket, spec, design, connected tickets; put your brief.md and design/ here before running
+  2-plan/            the plan and its reviews
+  3-build/           one folder per chunk (reviews and test results), then final/
+  4-mr/              MR text per repo, deploy notes
+  5-after-mr/        review feedback and rebases
+  code/              the ticket's own copies of the repos, one branch per ticket
+  .agent/            machine files: state, raw answers, logs per step
+```
+
+Your old `.claude/<number>/` brief and figma folders in the FE repo still work too.
 
 The repos themselves never get agent files. Personal `.claude/<ticket>` folders still work as `--context`.
 

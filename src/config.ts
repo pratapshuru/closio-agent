@@ -109,13 +109,11 @@ const ConfigSchema = z.object({
   }),
   design: z
     .object({
-      // closio-agent/<folder>/<KEY>/ is the team place to drop screenshots and CSS dumps
-      folder: z.string().default('figma'),
-      // also look in the frontend repo's personal .claude/<KEY> and .claude/<number> folders
+      // besides runs/<KEY>/1-input/design/, also look in the frontend repo's personal .claude/<KEY> and .claude/<number> folders
       legacy_folders: z.boolean().default(true),
       legacy_number_projects: z.array(z.string()).default(['SCRUM']),
     })
-    .default({ folder: 'figma', legacy_folders: true, legacy_number_projects: ['SCRUM'] }),
+    .default({ legacy_folders: true, legacy_number_projects: ['SCRUM'] }),
   // optional: reconnect the VPN by itself with openfortivpn (browser SSO); see README "VPN"
   vpn: z
     .object({
@@ -129,10 +127,7 @@ const ConfigSchema = z.object({
     .optional(),
   workspace: z.object({
     runs_dir: z.string().default('runs'),
-    worktrees_dir: z.string().default('worktrees'),
     sprints_dir: z.string().default('sprints'),
-    handoffs_dir: z.string().default('handoffs'),
-    briefs_dir: z.string().default('briefs'),
   }),
 });
 export type Config = z.infer<typeof ConfigSchema>;

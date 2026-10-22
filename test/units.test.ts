@@ -184,7 +184,7 @@ describe('safety and config', () => {
     expect(renderPlan('Sprint 28', sprintPlan)).toContain('Ticket issues (for the tech lead)');
   });
 
-  it("finds the developer's brief in briefs/ or the old .claude prompt files", () => {
+  it("finds the developer's brief in the ticket folder or the old .claude prompt files", () => {
     const { root, repo } = sandbox();
     const config = testConfig(root, repo);
     config.repos.svc.kind = 'frontend';
@@ -194,16 +194,17 @@ describe('safety and config', () => {
     fs.writeFileSync(path.join(legacy, '524Ticket.md'), 'ticket');
     fs.writeFileSync(path.join(legacy, '524-prompt.md'), 'brief');
     expect(findBrief(config, 'SCRUM-524')).toBe(path.join(legacy, '524-prompt.md'));
-    fs.mkdirSync(path.join(root, 'briefs'));
-    fs.writeFileSync(path.join(root, 'briefs', 'SCRUM-524.md'), 'team brief');
-    expect(findBrief(config, 'SCRUM-524')).toBe(path.join(root, 'briefs', 'SCRUM-524.md'));
+    const own = path.join(root, 'runs', 'SCRUM-524', '1-input');
+    fs.mkdirSync(own, { recursive: true });
+    fs.writeFileSync(path.join(own, 'brief.md'), 'team brief');
+    expect(findBrief(config, 'SCRUM-524')).toBe(path.join(own, 'brief.md'));
   });
 
   it("shows a connected ticket together with its run's handoff note", () => {
     const { root, repo } = sandbox();
     const config = testConfig(root, repo);
-    fs.mkdirSync(path.join(root, 'handoffs'));
-    fs.writeFileSync(path.join(root, 'handoffs', 'SCRUM-560.md'), 'Reuse ConfigForm.vue');
+    fs.mkdirSync(path.join(root, 'runs', 'SCRUM-560'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'runs', 'SCRUM-560', 'handoff-note.md'), 'Reuse ConfigForm.vue');
     const issue = { key: 'SCRUM-560', summary: 'Add', status: 'Code Review', type: 'Story', labels: [], description: 'd', attachments: [], comments: [], links: [], sprints: [] };
     const text = relatedText(config, issue, [{ repo: 'frontend', branch: 'scrum-560' }]);
     expect(text).toContain('branch `scrum-560`');

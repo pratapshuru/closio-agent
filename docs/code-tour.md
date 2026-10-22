@@ -103,7 +103,7 @@ Throughout:
 | `package.json` | The project's ID card: name, the `agent` command it installs (`bin`), Node 22.18+ required, and three libraries. **`yaml`** reads config files; **`zod`** describes data shapes (see `schemas.ts`); **`vitest`** runs our tests. Also the scripts `npm test` and `npm run typecheck`. |
 | `package-lock.json` | Exact library versions, so every laptop installs the same thing. Generated, never edited by hand. |
 | `tsconfig.json` | Settings for the TypeScript checker (`npm run typecheck`): strict checking, no build output (Node runs the `.ts` files directly). |
-| `vitest.config.ts` | Settings for our tests: only `test/*.test.ts`, never the other repos' tests inside `worktrees/`. |
+| `vitest.config.ts` | Settings for our tests: only `test/*.test.ts`, never the other repos' tests inside the ticket folders' `code/`. |
 | `agent.config.yaml` | **Team settings, committed.** Jira site and statuses (In Development, Code Review, Ready For Test, testing statuses); GitLab site and MR options; each repo (role, GitLab path, target branch, test commands, protected files, hook setting); which repos BE or FE tickets usually touch; model profiles (quality, balanced, cheap, claude-only, smoke); limits (3 review rounds, 2 fix attempts, 45-minute timeout per AI step); design folder; where run files live. |
 | `agent.local.example.yaml` | A template of the personal settings file. |
 | `agent.local.yaml` | **Your settings, never committed:** where each repo lives on your laptop, draft MRs while testing, default model profile, VPN gateway and certificate fingerprint. Merged on top of the team file. |
@@ -142,7 +142,7 @@ Almost everything lives in one class, **`Run`**: one ticket's run. Think of it i
 
 **a) Creating and saving a run**
 - `Run.create()` sets up a fresh state: stage `intake`, the models from the profile, empty lists. `Run.load()` reads an existing one.
-- `save()` writes `runs/<KEY>/state.json`. `file()` builds paths inside the run folder. `root` is the ticket's folder under `worktrees/`.
+- `save()` writes `runs/<KEY>/.agent/state.json` and refreshes the ticket's `README.md`. `file()` builds paths inside the ticket folder, putting each kind of file in its place (`place()`). `root` is the ticket's `code/` folder.
 
 **b) Talking to the AIs: `call()`**, the most important method.
 - Every AI step goes through `call(role, step, prompt, schema, access)`.
@@ -153,7 +153,7 @@ Almost everything lives in one class, **`Run`**: one ticket's run. Think of it i
 - If the answer is malformed it retries once. If the reviewer's conversation was lost, it starts a fresh one with the full rules.
 
 **c) What the AIs are told**
-- `devRules()` and `fullReviewerRules()` fill in `prompts/dev-rules.md` and `reviewer-rules.md` with this ticket's sources (`sourceVars()`), the repo map (`repoMap()`: which repos, their copies, their tests, protected files, how to read other repos) and the list of databases.
+- The base prompt depends on the ticket's side, from each repo's `kind`: a BE ticket gets `prompts/dev/backend.md` (dev) and `prompts/reviewer/backend.md` (reviewer), an FE ticket the frontend ones, a ticket touching both gets both. Each conversation gets its base once, ahead of its first step, together with each repo's own `CLAUDE.md` (`conventions()`); if planning adds the other side, that base goes out with the next step. `sourceVars()` fills in the ticket's sources and `repoMap()` the repos.
 - `reviewerRules()` gives the **short reminder** instead of the full rules once the reviewer has seen them.
 - `decisions()` adds "decisions already made" (your answers, assumptions).
 
@@ -183,7 +183,7 @@ Almost everything lives in one class, **`Run`**: one ticket's run. Think of it i
   3. `align('final')`;
   4. the handoff: `deployNotes()`, changes, `impact()`;
   5. the MR text via `mrDescription()`;
-  6. the note for later tickets in `handoffs/`.
+  6. the note for later tickets, `handoff-note.md`.
 - `publishing()`: push, MRs (create or reuse, linked to each other), Jira to Code Review with the summary comment.
 
 **g) After the MR**
@@ -276,7 +276,7 @@ Almost everything lives in one class, **`Run`**: one ticket's run. Think of it i
 
 #### `src/git.ts`: git work (~245 lines)
 
-- `ensureWorktree()` fetches the target branch and makes the ticket's own copy of a repo under `worktrees/` on a new branch. `linkDependencies()` links `node_modules` from your checkout instead of reinstalling.
+- `ensureWorktree()` fetches the target branch and makes the ticket's own copy of a repo under `runs/<KEY>/code/` on a new branch. `linkDependencies()` links `node_modules` from your checkout instead of reinstalling.
 - `changedFiles()`, `filesChangedSince()` and `diffStat()` list what changed. `prepareDiffForReview()` makes new files show up in the diff the reviewer reads.
 - `commitChanges()` commits (optionally skipping hooks). `enforceHead()` undoes commits an AI made, keeping the changes.
 - `revertSecretEdits()` reverts `.env` and key edits. `revertProtectedEdits()` undoes edits to protected files and existing migrations; `matchesPath()` is the "does this path match `src/views/x/**`" check.
@@ -334,7 +334,7 @@ Almost everything lives in one class, **`Run`**: one ticket's run. Think of it i
 
 - `prepareDesign()` picks the design source: your folder (`findDesignFolders()`, `collectDesignFiles()`, which follows screenshot paths, even with spaces), files saved earlier, Figma MCP (`figmaMcpStatus()`, with only four read tools in `FIGMA_TOOLS`), or none.
 - `designBrief()` writes the matching instructions from `prompts/design/`.
-- `findBrief()` finds your brief (`briefs/KEY.md` or your old `.claude` prompt files).
+- `findBrief()` finds your brief (`runs/<KEY>/1-input/brief.md`, or your old `.claude` prompt files).
 - `designWaitMessage()` is the "drop files here" pause text.
 
 #### `src/ingest.ts`: turning inputs into files (~95 lines)
@@ -381,8 +381,9 @@ Almost everything lives in one class, **`Run`**: one ticket's run. Think of it i
 
 | File | Used for |
 |---|---|
-| `dev-rules.md` | The dev's standing rules: sources, how to decide, the self-grill, calls vs gaps vs questions, engineering rules, BE layering, tests, safety, the repo map. Sent once per conversation. |
-| `reviewer-rules.md` | The reviewer's rules: what to check (bugs, ticket fit, repo patterns, security, scope), listed calls aren't findings, a silent deviation is. |
+| `dev/backend.md` | **The BE base prompt**, a complete way of working for a backend ticket: sources (techspec, contract, read-only DB), the BE ticket types (read endpoint, write endpoint, schema change, worker/job, WS1 route only, bug fix) and the plan sections each one must cover (error ladder, field-to-column table, migration safety, idempotency…), how to decide, WS1 vs WS2, engineering rules, chunks and tests. |
+| `dev/frontend.md` | **The FE base prompt**: sources including the design, the FE ticket types (list, detail, add/edit form, change to a screen, shared component, bug fix) and their plan sections (field tables, states, error codes, Add/Edit reuse…), how the web app is built, engineering rules, chunks and tests. |
+| `reviewer/backend.md`, `reviewer/frontend.md` | The reviewer's base for each side: review method, the side's ticket types it must check the plan covers, and the side's own checks (BE: SQL injection, tenant isolation, transactions, migrations, layers; FE: XSS, reactivity, states, copy, permissions). |
 | `plan.md`, `plan-revise.md`, `review-plan.md`, `answers.md` | Planning: write the plan, revise it after review, review it, fold in human answers. |
 | `chunk.md`, `chunk-fix.md`, `review-chunk.md` | The chunk loop: write it, fix it, review it. `review-chunk` is also reused for cleanup, alignment and feedback commits. |
 | `audit.md`, `fix-final.md` | The whole-ticket review and final fixes. |
@@ -418,14 +419,11 @@ The newest features (VPN, QA answers, cascade, bug tickets, protected files, dep
 
 | Folder | What's in it |
 |---|---|
-| `runs/<KEY>/` | One ticket: `state.json`; `inputs/` (ticket, spec text, brief, connected tickets, design); `logs/` (every prompt, permission file, raw AI output); `reviews/`, `steps/`, `gates/`; `plan.md`, `decisions.md`, `questions.md`, `impact.md`, `deployment.md`, `mr-<repo>.md`. |
+| `runs/<KEY>/` | Everything about one ticket: `README.md` (where it stands, what to read), `decisions.md`, `questions.md`, `impact.md`, `handoff-note.md`; `1-input/` (ticket, spec, design, your brief, connected tickets); `2-plan/`; `3-build/` (a folder per chunk with its reviews and test results, then `final/`); `4-mr/`; `5-after-mr/`; `code/` (the ticket's copies of the repos); `.agent/` (state, raw answers, logs per step). Laid out by `Run.file()` and `place()` in `pipeline.ts`. |
 | `runs/_baselines/` | Cached test baselines per repo and commit. |
 | `runs/_vpn/` | The VPN log. |
-| `worktrees/<KEY>/<repo>/` | The ticket's own copies of the repos. |
 | `sprints/` | Sprint maps and sprint-plan reports. |
-| `handoffs/` | Notes for later tickets. |
-| `briefs/` | Your briefs per ticket. |
-| `figma/<KEY>/` | Design files you drop in. |
+| `runs/_tmp/` | Throwaway code copies for test baselines and replay scoring. |
 | `replays/` | Old tickets used for replays. |
 
 ---

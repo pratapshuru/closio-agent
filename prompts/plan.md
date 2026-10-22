@@ -2,7 +2,7 @@
 
 ## Your task now: recon and plan. Do not write code.
 
-1. Read the design brief `{{figma}}` first and do what it says: use the developer's files, the saved Figma files, or fetch through Figma MCP. Set `design_status` to match.
+1. Decide what kind of work this ticket is, using the types in your base prompt. Start `plan_markdown` with `Type: …` and cover every section those types need. {{design}}
 2. Read the ticket, then search the spec and the code. Work out:
    - what is being asked,
    - what already exists and can be reused,
@@ -19,7 +19,7 @@
    Add each to `gaps`: `ticket` (the other ticket's key, or "spec", or "" if it's this ticket's own text), `what` (one or two plain sentences, first person, like a message to the lead), `assumption` (what you'll build on meanwhile), `alternative` (a fallback if the lead says no, or ""). Then keep planning on that assumption. Only a gap where guessing wrong means throwing the work away becomes a blocking question instead. Leave `gaps` empty when everything lines up, which is the usual case.
 4. Decide which repos this ticket touches. The candidate repos were guessed from the ticket and may be wrong; add or drop repos with a reason. Backend tickets usually need the WS1 gateway plus one WS2 service.
 5. Grill yourself (see How to decide in the rules). Walk through every choice the ticket needs and settle each one from the evidence. Record in `calls` only the real judgement calls: where nothing settled it, or where you went against the ticket, spec or design (for example to keep the repo consistent).
-6. Split the work into reviewable chunks. Each chunk is one atomic commit in exactly one repo, small enough to review in one sitting, and ordered so each builds on the last. Put contract-owning work first (WS2 before WS1, backend before frontend in a combined ticket) unless there is a reason not to. If a repo or area already has tests, put its tests chunk last for that repo; if it has none, follow that convention and add no tests chunk there. For UI work, every chunk that builds UI must match the design files, including copy word for word from `copy.md` or the dumps.
+6. Split the work into reviewable chunks. Each chunk is one atomic commit in exactly one repo, small enough to review in one sitting, and ordered so each builds on the last. Put contract-owning work first (WS2 before WS1, backend before frontend in a combined ticket) unless there is a reason not to. If a repo or area already has tests, put its tests chunk last for that repo; if it has none, follow that convention and add no tests chunk there.
 7. Raise a question only for an extreme blocker (see the rules). Most tickets need none. Mark it `blocking` when a chunk cannot be built correctly without the answer. Everything else is a call.
 
 Also answer the developer's usual questions explicitly, in the plan fields:
@@ -29,4 +29,4 @@ Also answer the developer's usual questions explicitly, in the plan fields:
 - `upcoming`: tickets that will build on this one (from the sprint map, sprint advice or epic) and what they need from it, so it is built reusably now. Say what you are deliberately not abstracting yet.
 - `done_checklist`: concrete checks that prove this ticket is done: each acceptance criterion, key states and edge cases, and existing flows that must still work.
 
-`plan_markdown` is the full plan a human would read: approach and why, files and areas to change, what is reused vs extended, how existing behaviour is protected, chunks, risks, out of scope. Use plain language. `responses` is empty on the first plan.
+`plan_markdown` is the full plan a human would read: the `Type:` line and the sections it requires, approach and why, files and areas to change, what is reused vs extended, how existing behaviour is protected, chunks, risks, out of scope. Use plain language. `responses` is empty on the first plan.

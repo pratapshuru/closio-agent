@@ -126,8 +126,9 @@ export function runsDir(config: Config): string {
   return ensureDir(resolvePath(config.workspace.runs_dir));
 }
 
-export function worktreesDir(config: Config): string {
-  return ensureDir(resolvePath(config.workspace.worktrees_dir));
+// throwaway code copies shared by all runs (baseline and replay scoring)
+export function scratchDir(config: Config): string {
+  return ensureDir(path.join(runsDir(config), '_tmp'));
 }
 
 export function runDir(config: Config, key: string): string {
@@ -135,7 +136,7 @@ export function runDir(config: Config, key: string): string {
 }
 
 export function stateFile(config: Config, key: string): string {
-  return path.join(runDir(config, key), 'state.json');
+  return path.join(runDir(config, key), '.agent', 'state.json');
 }
 
 export function hasRun(config: Config, key: string): boolean {
@@ -155,8 +156,8 @@ export function saveState(config: Config, state: RunState): void {
 export function listRuns(config: Config): RunState[] {
   return fs
     .readdirSync(runsDir(config), { withFileTypes: true })
-    .filter((d) => d.isDirectory() && fs.existsSync(path.join(runsDir(config), d.name, 'state.json')))
-    .map((d) => readJson<RunState>(path.join(runsDir(config), d.name, 'state.json')));
+    .filter((d) => d.isDirectory() && hasRun(config, d.name))
+    .map((d) => readJson<RunState>(stateFile(config, d.name)));
 }
 
 export function totals(state: RunState): { costUsd: number; minutes: number; calls: number } {
