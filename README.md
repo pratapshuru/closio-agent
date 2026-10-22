@@ -147,6 +147,25 @@ Gaps the runs found and that are now fixed:
 
 Every run fetches the ticket's sprint and epic from Jira into `sprints/<sprint>.md`, and saves the full text of connected tickets (Jira links, mentioned keys, same feature) into the run. The dev bot reads them while planning, and fetches more itself if needed. If the ticket needs another ticket's **unmerged code** (e.g. Edit reusing Add's form), the branch starts on that ticket's branch, and the MR says to merge the other one first. Before every MR, an **alignment check** compares the work with the connected tickets (contracts, shared code, the parent's review fixes) and fixes small mismatches.
 
+## Answering the grill yourself: `--ask`
+
+By default the Dev Agent answers its own grill: every decision recon left open is settled by the agent and logged in `decisions.md` with its options, recommendation, choice and why. With `agent run SCRUM-561 --ask` it asks you instead. Recon and the grill come first, then you answer, and only then is the plan written, built on your answers. One question at a time:
+
+```
+Grill · SCRUM-561 · question 3 of 7
+
+How do we stop two edits of the same config from overlapping periods?
+  a) check for overlap in the service only
+  b) service check + the existing exclusion constraint   ← recommended
+  c) lock the row with SELECT … FOR UPDATE
+Agent's reasoning: the check gives the spec's error code; the constraint catches the race.
+Your answer [Enter = recommended · a/b/c · your own words · auto · auto all]:
+```
+
+Enter takes the recommendation, a letter picks an option, anything else is your own answer. `auto` leaves that one to the agent, `auto all` the rest. If you choose differently from the recommendation and that opens a decision the sources can't settle, it comes to you as a follow-up, still before the plan; `limits.grill_rounds` (default 3) caps the follow-up rounds, after which the agent decides and notes it would have asked you. After the grill, plan review settles new decisions from the sources and your answers, and asks you only when nothing can settle one (only with `--ask`; without it, the agent takes its recommendation and logs it). Coding never asks. Hard blockers that only the PM or tech lead can answer still go to them on Jira, in both modes.
+
+The reviewer checks your decisions too. If it thinks one is wrong, it doesn't go to the Dev Agent: you see its evidence and keep yours (Enter), switch to another option, or give your own answer. A decision you keep is logged as "kept despite the reviewer" and not raised again. Questions are only asked at the terminal and never go to Jira. When nobody is at one (`agent watch`, output to a file), the run stops with "grill questions waiting: run `agent run <KEY>`" and you answer them there. Each decision in `decisions.md` and the plan says **Decided by: you** or **the agent**. `--ask` also works on a run in progress, from its next grill on.
+
 ## Sprint plan, handoff notes and your brief
 
 - **Sprint day:** run `agent sprint-plan` once. The AI reads the whole sprint and writes a local report covering dependencies, start order, FE/BE pairs, collision risks, what to build reusably, and unclear tickets for the tech lead. Every run in that sprint reads the parts about its own ticket.

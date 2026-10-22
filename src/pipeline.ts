@@ -15,7 +15,7 @@ import * as S from './schemas.ts';
 import { buildSprintContext, findBranches, mentionedKeys, relatedText, type TicketBranch } from './sprint.ts';
 import { adviceFor } from './sprintplan.ts';
 import { isMergedInto, ownSubjects, resolveRef, startOn, startRestack, verifyRestack } from './stack.ts';
-import { hasRun, listRuns, loadState, runDir, saveState, scratchDir, totals, type Phase, type RunState } from './state.ts';
+import { hasRun, listRuns, loadState, runDir, saveState, scratchDir, totals, type Challenge, type GrillAnswer, type Phase, type RunState } from './state.ts';
 import { ensureDir, exec, fill, log, now, PipelineStop, readJson, render, TOOL_ROOT, writeJson, writeText } from './util.ts';
 
 export type StartOptions = {
@@ -39,6 +39,8 @@ export type StartOptions = {
   // bug tickets: the story it's a bug in (found from Jira links otherwise); fresh = don't reuse that story's conversation
   parent?: string;
   fresh?: boolean;
+  // ask the developer every grill decision instead of letting the dev agent choose
+  ask?: boolean;
 };
 
 // models sometimes echo a schema field name as an xml tag around or after the text
@@ -52,15 +54,74 @@ export function humanCmd(cmd: string): string {
   return drop.reduce((c, flag) => c.replaceAll(flag, ''), cmd);
 }
 
+type GrillKind = 'grill' | 'challenge';
+const ASK_MODE = "The grill is done: the developer answered every open decision, listed under 'Decisions already made'. Don't grill again or re-ask them; build the plan on those answers. Put in `calls` only decisions you still had to make while planning, which should be rare: settle them from the sources and the developer's answers. The developer's decisions are added to the plan for you.";
+
+const canPrompt = () => Boolean(process.stdin.isTTY && process.stderr.isTTY && !process.env.CLOSIO_AGENT_NO_PROMPT);
+const letter = (i: number) => String.fromCharCode(97 + i);
+const letters = (n: number) => Array.from({ length: n }, (_, i) => letter(i)).join('/');
+const recommendedLetter = (c: S.Call) => {
+  const i = c.options.findIndex((o) => o.trim().toLowerCase() === c.recommended.trim().toLowerCase());
+  return i >= 0 ? letter(i) : c.recommended;
+};
+
+// what differs between asking a grill question and asking about a reviewer's challenge to your answer
+const ASKING: Record<GrillKind, { title: string; what: (n: number) => string; mark: string; markLabel: string; reason: string; headline: (c: S.Call) => string; hint: (options: number) => string }> = {
+  grill: {
+    title: 'Grill',
+    what: (n) => `${n} grill question(s)`,
+    mark: 'recommended',
+    markLabel: 'Recommended',
+    reason: "Agent's reasoning",
+    headline: (c) => c.question.trim(),
+    hint: (n) => `Enter = recommended · ${letters(n)} · your own words · auto · auto all`,
+  },
+  challenge: {
+    title: 'Reviewer challenge',
+    what: (n) => `${n} reviewer challenge(s) to your decisions`,
+    mark: 'your choice',
+    markLabel: 'Your choice',
+    reason: 'The reviewer says',
+    headline: (c) => `You decided: ${c.question.trim()} → ${c.chosen.trim()}`,
+    hint: (n) => `Enter = keep yours · ${letters(n)} to switch · your own words`,
+  },
+};
+
+// the options with the recommended one (or, for a challenge, your current one) marked
+function optionLines(c: S.Call, kind: GrillKind, indent: string): string[] {
+  const rec = recommendedLetter(c);
+  return [
+    ...c.options.map((o, i) => `${indent}${letter(i)}) ${o.trim()}${letter(i) === rec ? `   ← ${ASKING[kind].mark}` : ''}`),
+    ...(rec.length > 1 ? [`${indent}${ASKING[kind].markLabel}: ${c.recommended.trim()}`] : []),
+  ];
+}
+
+function grillQuestion(key: string, c: S.Call, n: number, total: number, kind: GrillKind): string {
+  return [`${ASKING[kind].title} · ${key} · question ${n} of ${total}`, '', ASKING[kind].headline(c), ...optionLines(c, kind, '  '), `${ASKING[kind].reason}: ${c.why.trim()}`].join('\n');
+}
+
+// a letter picks that option, "auto" leaves it to the agent, anything else is your own words
+function readGrillAnswer(typed: string, c: S.Call, kind: GrillKind): GrillAnswer | null {
+  const t = typed.trim();
+  if (!t) return null;
+  // on a challenge only keep, switch or your own words make sense; "auto" keeps yours
+  if (kind === 'challenge' && /^(keep|auto( all)?)$/i.test(t)) return { chosen: c.chosen, by: 'you' };
+  if (/^auto( all)?$/i.test(t)) return { chosen: c.chosen, by: 'agent' };
+  const i = /^[a-z]$/i.test(t) ? t.toLowerCase().charCodeAt(0) - 97 : -1;
+  if (i >= 0 && i < c.options.length) return { chosen: c.options[i].trim(), by: 'you' };
+  return { chosen: t, by: 'you' };
+}
+
 // a decision with all its options, as decisions.md and the plan show it
-function callLines(c: S.Call, indent = '  '): string {
-  const options = c.options.map((o, i) => `(${String.fromCharCode(97 + i)}) ${o.trim()}`);
+function callLines(c: S.Call, indent = '  ', by?: string): string {
+  const options = c.options.map((o, i) => `(${letter(i)}) ${o.trim()}`);
   return [
     `**${c.question.trim()}**`,
     `${indent}- Options: ${options.join('; ') || 'none listed'}`,
     `${indent}- Recommended: ${c.recommended.trim()}`,
     `${indent}- Chose: ${c.chosen.trim()}`,
     `${indent}- Why: ${c.why.trim()}`,
+    ...(by ? [`${indent}- Decided by: ${by}`] : []),
   ].join('\n');
 }
 
@@ -128,6 +189,7 @@ export class Run {
       replay: opts.replay,
       autoAnswer: opts.autoAnswer,
       baseOverride: opts.base,
+      askGrill: Boolean(opts.ask) && !opts.autoAnswer,
     };
     const run = new Run(config, state);
     ensureDir(run.dir);
@@ -387,6 +449,11 @@ export class Run {
   private decisions(): string {
     const items = [
       ...this.state.questions.answers.map((a) => `- Human answer: ${a}`),
+      ...Object.entries(this.state.grill?.answers ?? {}).map(([q, a]) => a.by === 'you'
+        ? `- The developer decided: ${q} → ${a.chosen}${this.state.grill?.kept?.includes(q) ? ' (kept after the reviewer challenged it; settled)' : ''}`
+        : a.limit
+          ? `- Settled in the grill by you (the follow-up limit was reached, so the developer wasn't asked): ${q} → ${a.chosen}`
+          : `- Settled in the grill by you (the developer left it to you): ${q} → ${a.chosen}`),
       ...this.state.assumptions.map((a) => `- ${a}`),
     ];
     return items.length ? `## Decisions already made (follow these)\n\n${items.join('\n')}` : '';
@@ -412,8 +479,9 @@ export class Run {
     };
   }
 
-  private designStep(): string {
+  private designStep(grill = false): string {
     const ui = Object.keys(this.state.repos).some((k) => this.repoCfg(k).kind === 'frontend');
+    if (grill) return ui ? `Read the design brief \`${this.state.inputs!.figma}\` before anything else and do what it says: use the developer's files, the saved Figma files, or fetch through Figma MCP.` : 'This ticket has no frontend work.';
     return ui
       ? `Read the design brief \`${this.state.inputs!.figma}\` before anything else and do what it says: use the developer's files, the saved Figma files, or fetch through Figma MCP. Set \`design_status\` to match.`
       : 'This ticket has no frontend work, so set `design_status` to `not_needed`.';
@@ -444,23 +512,25 @@ export class Run {
     return reminder !== this.fullReviewerRules() && text.startsWith(reminder) ? this.fullReviewerRules() + text.slice(reminder.length) : text;
   }
 
-  private previous(review: S.Review, responses: S.FindingResponse[]): string {
-    if (!review.findings.length) return '';
-    const rows = review.findings.map((f) => {
+  private previous(review: S.Review, responses: S.FindingResponse[], answered: string[] = []): string {
+    if (!review.findings.length && !answered.length) return '';
+    const rows = [...review.findings.map((f) => {
       const r = responses.find((x) => x.finding_id === f.id);
       return `- ${f.id} [${f.severity}${f.required ? ', required' : ''}] ${f.title}\n  Dev Agent: ${r ? `${r.decision.toUpperCase()}: ${r.reasoning}` : 'no response'}`;
-    });
+    }), ...answered];
     return `## Previous round\n\nYour earlier findings and the Dev Agent's responses are below. For each one, set \`previous_findings\` to resolved, dev_rebuttal_accepted (their evidence convinced you), or still_required. Accept a rebuttal when the evidence holds; do not repeat a finding just to win. New findings are allowed only for problems introduced by the latest changes or that you genuinely missed.\n\n${rows.join('\n')}`;
   }
 
-  private savePlan(plan: S.Plan): void {
+  private savePlan(plan: S.Plan): S.Plan {
+    plan = this.withGrillDecisions(plan);
     this.state.plan = plan;
     // same entries as decisions.md, so the two can't disagree
-    const grill = plan.calls.map((c, i) => `${i + 1}. ${callLines(c, '   ')}`).join('\n\n') || 'None: recon settled everything.';
+    const grill = plan.calls.map((c, i) => `${i + 1}. ${callLines(c, '   ', this.decidedBy(c))}`).join('\n\n') || 'None: recon settled everything.';
     const asked = plan.questions.map((q) => `- **For ${q.audience}:** ${q.question} (recommended: ${q.recommendation})`).join('\n');
     writeText(this.file('plan.md'), `${plan.plan_markdown.trim()}\n\n## Decisions taken during the grill phase\n\n${grill}\n${asked ? `\n## Blockers sent to a person\n\n${asked}\n` : ''}`);
     writeJson(this.file('plan.json'), plan);
     this.save();
+    return plan;
   }
 
   private saveReview(name: string, review: S.Review): void {
@@ -622,7 +692,7 @@ export class Run {
 
   // someone at the terminal answers right away; anyone else (agent watch, output to a file) gets the Jira comment
   private async askInTerminal(questions: S.Question[]): Promise<string[] | null> {
-    if (!process.stdin.isTTY || !process.stderr.isTTY || process.env.CLOSIO_AGENT_NO_PROMPT) return null;
+    if (!canPrompt()) return null;
     log(`the agent needs ${questions.length} answer(s)`);
     const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
     const answers: string[] = [];
@@ -640,20 +710,22 @@ export class Run {
   }
 
   // one way to stop and wait for a person: questions.md, run state, a Jira comment, then a clean stop
-  private async pause(kind: 'answers' | 'design' | 'dependency', body: string, resumePhase: Phase, summary: string): Promise<never> {
-    writeText(this.file('questions.md'), body);
+  private async pause(kind: 'answers' | 'design' | 'dependency' | 'grill', body: string, resumePhase: Phase, summary: string): Promise<never> {
+    // grill questions are only asked at the terminal; everything else is written to questions.md
+    if (kind !== 'grill') writeText(this.file('questions.md'), body);
     this.state.waitingFor = kind;
     this.state.questions.askedAt = now();
     this.state.resumePhase = resumePhase;
     this.state.phase = 'awaiting_answers';
     this.save();
-    if (this.state.jira) {
+    // grill questions are for the developer at this laptop, not for Jira
+    if (this.state.jira && kind !== 'grill') {
       const ids = await this.mentions();
       const text = kind === 'answers' ? body : body.replace(/^\*\*/, '@developer **');
       this.state.questions.commentId = await this.jira.addComment(this.state.key, this.named(text, ids), ids);
       this.save();
     }
-    throw new PipelineStop('waiting', `${summary} See ${this.file('questions.md')}`);
+    throw new PipelineStop('waiting', kind === 'grill' ? summary : `${summary} See ${this.file('questions.md')}`);
   }
 
   // only an explicit go-ahead counts; "files coming tonight" is not one
@@ -872,17 +944,17 @@ export class Run {
   }
 
   // decisions.md; the handoff picks the MR's "worth a second look" from the non-note entries
-  private decide(where: string, decision: string, why: string, note = false, call?: S.Call): void {
+  private decide(where: string, decision: string, why: string, note = false, call?: S.Call, by?: 'you' | 'agent'): void {
     const list = (this.state.decisions ??= []);
     if (list.some((d) => d.decision === decision)) return;
-    list.push({ at: now(), where, decision, why, note, call });
+    list.push({ at: now(), where, decision, why, note, call, by });
     writeText(this.file('decisions.md'), `# Decisions for ${this.state.key}\n\n${this.decisionLines(false) || '- none'}\n\n## Other notes\n\n${this.decisionLines(true) || '- none'}`);
   }
 
   private decisionLines(note: boolean): string {
     return (this.state.decisions ?? [])
       .filter((d) => Boolean(d.note) === note)
-      .map((d) => (d.call ? `- **[${d.where}]** ${callLines(d.call)}` : `- **[${d.where}]** ${d.decision}${d.why ? `\n  Why: ${d.why}` : ''}`))
+      .map((d) => (d.call ? `- **[${d.where}]** ${callLines(d.call, '  ', d.by === 'you' ? 'you' : this.decidedBy(d.call))}` : `- **[${d.where}]** ${d.decision}${d.why ? `\n  Why: ${d.why}` : ''}`))
       .join('\n');
   }
 
@@ -915,7 +987,156 @@ export class Run {
   }
 
   private logCalls(where: string, calls: S.Call[]): void {
-    for (const c of calls) this.decide(where, `${c.question} Chose: ${c.chosen}`, c.why, false, c);
+    for (const c of calls) this.decide(where, `${c.question} Chose: ${c.chosen}`, c.why, false, c, this.state.grill?.answers[c.question]?.by ?? 'agent');
+  }
+
+  private decidedBy(c: S.Call): string {
+    const a = this.state.grill?.answers[c.question];
+    if (a?.by === 'you') return 'you';
+    return a?.limit ? 'the agent (the follow-up limit was reached)' : 'the agent';
+  }
+
+  // --ask: recon and the grill come first; the developer answers every open decision, and follow-ups to those
+  // answers, before any plan is written
+  private async grillPhase(): Promise<void> {
+    const grill = (this.state.grill ??= { answers: {} });
+    if (!grill.calls) {
+      const r = await this.call('dev', 'grill', render(prompt('grill'), { rules: this.devRules(), design: this.designStep(true) }), S.Grill, 'read');
+      grill.calls = r.calls;
+      grill.round = 0;
+      this.save();
+    }
+    const rounds = this.config.limits.grill_rounds;
+    for (;;) {
+      const open = grill.calls!.filter((c) => !grill.answers[c.question]);
+      if (!open.length) break;
+      // the first round is the grill itself; up to `rounds` follow-up rounds come after it
+      if (grill.round! > rounds) {
+        // out of follow-up rounds: the agent takes its recommendation and says so
+        for (const c of open) {
+          c.why = `${c.why.trim().replace(/[^.!?]$/, '$&.')} Would have asked you; the follow-up limit (${rounds}) was reached.`;
+          grill.answers[c.question] = { chosen: c.chosen, by: 'agent', limit: true };
+        }
+        break;
+      }
+      const answers = await this.askDeveloper(open, 'grill');
+      Object.assign(grill.answers, answers);
+      grill.round! += 1;
+      this.state.humanTouches += 1;
+      this.save();
+      const changed = open.filter((c) => answers[c.question].by === 'you' && answers[c.question].chosen !== c.recommended);
+      if (!changed.length) break;
+      const r = await this.call('dev', `grill-followup-${grill.round}`, render(prompt('grill-followup'), {
+        answers: changed.map((c) => `- ${c.question}\n  You recommended: ${c.recommended}\n  The developer chose: ${answers[c.question].chosen}`).join('\n'),
+      }), S.Grill, 'read');
+      grill.calls!.push(...r.calls.filter((c) => !grill.calls!.some((x) => x.question === c.question)));
+      this.save();
+    }
+    grill.done = true;
+    this.save();
+  }
+
+  // the plan always carries every grill decision with its final answer, whatever the dev agent wrote
+  private withGrillDecisions(plan: S.Plan): S.Plan {
+    const grill = this.state.grill;
+    if (!grill?.calls) return plan;
+    const asked = grill.calls.map((g) => {
+      const own = plan.calls.find((c) => c.question === g.question);
+      const a = grill.answers[g.question];
+      if (own) return { ...own, chosen: a?.chosen ?? own.chosen };
+      if (a?.by === 'you' && a.chosen !== g.recommended) return { ...g, chosen: a.chosen, why: `You chose this. The agent had recommended ${g.recommended} because: ${g.why.trim()}` };
+      return { ...g, chosen: a?.chosen ?? g.chosen };
+    });
+    return { ...plan, calls: [...asked, ...plan.calls.filter((c) => !grill.calls!.some((g) => g.question === c.question))] };
+  }
+
+  // after the grill, a new decision nothing can settle is asked of the developer only with --ask; hard blockers for the PM or lead always are
+  private askRule(): string {
+    return this.state.askGrill
+      ? "Raise a question only when neither the sources nor the developer's answers can settle it and it changes what gets built: audience `developer`, `blocking: true`, and say exactly why in `why_unresolvable`. A hard blocker only the PM or tech lead can answer goes to them, as usual."
+      : 'Settle it with your recommendation and record it in `calls`; never ask the developer. A hard blocker only the PM or tech lead can answer goes to them, as usual.';
+  }
+
+  private async applyDeveloperChoices(plan: S.Plan, lines: string[]): Promise<S.Plan> {
+    if (!lines.length) return plan;
+    const next = await this.call('dev', `grill-answers-${(this.state.ledger ?? []).length}`, render(prompt('grill-answers'), { answers: lines.join('\n'), askRule: this.askRule() }), S.Plan, 'read');
+    return this.savePlan(next);
+  }
+
+  // a reviewer finding titled "Developer decision <n>: …" challenges your answer to grill decision n. One you
+  // already kept is settled: it goes to nobody.
+  private challengesIn(review: S.Review, plan: S.Plan): { challenges: Challenge[]; settled: string[] } {
+    const challenges: Challenge[] = [];
+    const settled: string[] = [];
+    if (!this.state.askGrill) return { challenges, settled };
+    const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    for (const f of review.findings) {
+      const m = f.title.match(/^\s*developer decision\s*#?(\d+)?\s*:\s*(.*)$/i);
+      if (!m) continue;
+      const c = m[1] ? plan.calls[Number(m[1]) - 1] : plan.calls.find((x) => norm(x.question) === norm(m[2]));
+      if (!c || this.state.grill?.answers[c.question]?.by !== 'you') continue;
+      if (this.state.grill?.kept?.includes(c.question)) settled.push(f.id);
+      else challenges.push({ finding: f.id, question: c.question, reason: f.detail.trim() });
+    }
+    return { challenges, settled };
+  }
+
+  // the developer, not the dev agent, settles a challenge to their own decision: keep it, or switch
+  private async resolveChallenges(plan: S.Plan): Promise<S.Plan> {
+    const grill = this.state.grill!;
+    // asked like a grill question, with your current choice standing in for the recommendation
+    const items = (grill.challenges ?? []).map((ch) => {
+      const current = grill.answers[ch.question].chosen;
+      const options = plan.calls.find((c) => c.question === ch.question)?.options ?? [];
+      return { question: ch.question, options, recommended: current, chosen: current, why: ch.reason };
+    });
+    if (!items.length) return plan;
+    const answers = await this.askDeveloper(items, 'challenge');
+    const switched: string[] = [];
+    for (const it of items) {
+      const a = answers[it.question];
+      if (a.by === 'you' && a.chosen !== it.chosen) {
+        grill.answers[it.question] = a;
+        switched.push(`- ${it.question}\n  The developer first chose: ${it.chosen}\n  After the reviewer's challenge, they chose: ${a.chosen}`);
+      } else {
+        grill.kept = [...new Set([...(grill.kept ?? []), it.question])];
+        this.decide('plan review', `Kept despite the reviewer: ${it.question} → ${it.chosen}`, it.why);
+      }
+    }
+    grill.challenges = undefined;
+    this.state.humanTouches += 1;
+    this.save();
+    return this.applyDeveloperChoices(plan, switched);
+  }
+
+  private async askDeveloper(items: S.Call[], kind: GrillKind): Promise<Record<string, GrillAnswer>> {
+    if (canPrompt()) return this.askInTerminalOneByOne(items, kind);
+    // nobody at the terminal (agent watch, output to a file): stop until the developer runs it at one
+    const what = ASKING[kind].what(items.length);
+    return this.pause('grill', '', 'planning', `${what[0].toUpperCase()}${what.slice(1)} waiting for you: run \`agent run ${this.state.key}\` at a terminal to answer them.`);
+  }
+
+  // the /grill-me experience: one question at a time
+  private async askInTerminalOneByOne(items: S.Call[], kind: GrillKind): Promise<Record<string, GrillAnswer>> {
+    log(`${ASKING[kind].what(items.length)} for you`);
+    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+    const answers: Record<string, GrillAnswer> = {};
+    let restToAgent = false;
+    try {
+      for (const [i, c] of items.entries()) {
+        if (restToAgent) {
+          answers[c.question] = { chosen: c.chosen, by: 'agent' };
+          continue;
+        }
+        process.stderr.write(`\n${grillQuestion(this.state.key, c, i + 1, items.length, kind)}\n`);
+        const typed = (await rl.question(`Your answer [${ASKING[kind].hint(c.options.length)}]: `)).trim();
+        if (kind === 'grill' && /^auto all$/i.test(typed)) restToAgent = true;
+        answers[c.question] = readGrillAnswer(typed || recommendedLetter(c), c, kind) ?? { chosen: c.chosen, by: 'agent' };
+      }
+    } finally {
+      rl.close();
+    }
+    return answers;
   }
 
   // the dev agent pushed back on reviewer findings; those are decisions too
@@ -942,13 +1163,15 @@ export class Run {
     if (this.state.parentRun && !this.state.bugTriage && !(await this.confirmBug())) return;
     if (this.state.parentRun && !this.state.parentRun.merged && !this.state.baseOverride && !this.state.skipDependencies) await this.askWhereBugGoes();
     if (!this.state.plan) await this.prepareDesign();
-    let plan = this.state.plan ?? (await this.call('dev', 'plan', render(prompt('plan'), { rules: this.devRules(), design: this.designStep() }), S.Plan, 'read'));
+    if (this.state.askGrill && !this.state.plan && !this.state.grill?.done) await this.grillPhase();
+    let plan = this.state.plan ?? (await this.call('dev', 'plan', render(prompt('plan'), { rules: this.devRules(), design: this.designStep(), grillMode: this.state.askGrill ? ASK_MODE : '' }), S.Plan, 'read'));
     if (plan.design_status === 'unavailable' && this.state.design?.mode === 'mcp') {
       log('  Figma MCP failed during planning');
       if (this.state.design) this.state.design.mode = 'unavailable';
       await this.waitForDesign();
     }
-    this.savePlan(plan);
+    plan = this.savePlan(plan);
+    if (this.state.grill?.challenges?.length) plan = await this.resolveChallenges(plan);
     let previous = '';
     const rounds = this.config.limits.review_rounds;
     for (let round = 1; round <= rounds; round++) {
@@ -966,17 +1189,38 @@ export class Run {
         plan.questions.push({ id: `R${round}`, audience: 'tech_lead', question: review.human_question, why_unresolvable: review.summary, recommendation: 'See the plan review', blocking: true });
         break;
       }
-      const required = review.findings.filter((f) => f.required);
-      if (review.verdict === 'approved' || !required.length) break;
+      // challenges to the developer's own decisions go to the developer; the rest go to the dev agent
+      const { challenges, settled } = this.challengesIn(review, plan);
+      let youChanged = false;
+      if (challenges.length) {
+        const before = JSON.stringify(plan.calls);
+        this.state.grill!.challenges = challenges;
+        plan = await this.resolveChallenges(plan);
+        youChanged = JSON.stringify(plan.calls) !== before;
+      }
+      const forDev = { ...review, findings: review.findings.filter((f) => !settled.includes(f.id) && !challenges.some((c) => c.finding === f.id)) };
+      // the reviewer's recap: challenges to the developer's decisions were answered by the developer, not the Dev Agent
+      const answered = [...challenges.map((c) => c.finding), ...settled].map((id) => {
+        const f = review.findings.find((x) => x.id === id)!;
+        const q = challenges.find((c) => c.finding === id)?.question;
+        return `- ${f.id} ${f.title}\n  The developer: ${q && !this.state.grill?.kept?.includes(q) ? 'switched their decision; check the updated plan' : 'kept their decision; settled'}`;
+      });
+      const required = forDev.findings.filter((f) => f.required);
+      if ((review.verdict === 'approved' || !required.length) && !youChanged) break;
       if (round === rounds) {
         const responses = plan.responses;
         for (const f of required) this.state.disagreements.push({ where: 'plan', finding: f, devReasoning: responses.find((r) => r.finding_id === f.id)?.reasoning ?? '' });
         break;
       }
-      plan = await this.call('dev', `plan-revise-${round}`, render(prompt('plan-revise'), { review: json(review) }), S.Plan, 'read');
-      this.logRejections('plan review', review.findings, plan.responses);
-      this.savePlan(plan);
-      previous = this.previous(review, plan.responses);
+      // only your own switch changed the plan: the reviewer checks it again
+      if (!required.length) {
+        previous = this.previous(forDev, [], answered);
+        continue;
+      }
+      plan = await this.call('dev', `plan-revise-${round}`, render(prompt('plan-revise'), { review: json(forDev), askRule: this.askRule() }), S.Plan, 'read');
+      this.logRejections('plan review', forDev.findings, plan.responses);
+      plan = this.savePlan(plan);
+      previous = this.previous(forDev, plan.responses, answered);
     }
     // a replay is scored on one repo; its base commit only exists there
     const replayRepo = this.state.replay?.repo;
@@ -986,7 +1230,7 @@ export class Run {
       plan.repos = plan.repos.filter((r) => r.key === replayRepo);
       plan.chunks = plan.chunks.filter((c) => c.repo === replayRepo);
     }
-    this.savePlan(plan);
+    plan = this.savePlan(plan);
 
     for (const r of plan.repos) {
       if (!this.config.repos[r.key]) throw new PipelineStop('failed', `Plan uses unknown repo '${r.key}'`);
@@ -1008,6 +1252,13 @@ export class Run {
   }
 
   async awaitingAnswers(): Promise<void> {
+    if (this.state.waitingFor === 'grill') {
+      // back to planning, which asks the open grill questions again (or reads the filled-in file)
+      this.state.waitingFor = undefined;
+      this.state.phase = 'planning';
+      this.save();
+      return;
+    }
     if (this.state.waitingFor === 'design') {
       const answers = await this.collectAnswers();
       const folders = findDesignFolders(this.config, this.state.key);

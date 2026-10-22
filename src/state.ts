@@ -78,7 +78,7 @@ export type RunState = {
   design?: Design;
   designSkipped?: boolean;
   // what an awaiting_answers pause is waiting for
-  waitingFor?: 'answers' | 'design' | 'dependency';
+  waitingFor?: 'answers' | 'design' | 'dependency' | 'grill';
   context?: SprintContext;
   depsResolved?: boolean;
   // a dependency that could not be built on yet (parent not started, or two parents in one repo)
@@ -89,7 +89,13 @@ export type RunState = {
   alignment?: Array<{ ticket: string; problem: string; action: string; detail: string }>;
   // every call made without asking a human, logged as it happens (runs/<KEY>/decisions.md)
   // note: true for routine entries (branching, answers a human gave) that never reach the MR
-  decisions?: Array<{ at: string; where: string; decision: string; why: string; note?: boolean; call?: Call }>;
+  decisions?: Array<{ at: string; where: string; decision: string; why: string; note?: boolean; call?: Call; by?: 'you' | 'agent' }>;
+  // --ask: the developer answers every grill decision themselves
+  askGrill?: boolean;
+  // asked: the one grill session happened; challenges: reviewer findings against the developer's own answers, waiting on them
+  // calls: every decision put to the developer; round: grill rounds asked so far (the first is the grill itself);
+  // done: the plan can be written; challenges: reviewer findings against the developer's answers, waiting on them
+  grill?: { calls?: Call[]; answers: Record<string, GrillAnswer>; round?: number; done?: boolean; challenges?: Challenge[]; kept?: string[] };
   // significant differences from the ticket or spec (handoff, then feedback rounds)
   changes?: Array<{ kind: string; what: string; why: string }>;
   // protected files this run may edit (from --allow-edit)
@@ -121,6 +127,10 @@ export type RunState = {
   replay?: { repo: string; base: string; reference?: string };
   error?: string;
 };
+
+// limit: the agent took it because the follow-up limit was reached
+export type GrillAnswer = { chosen: string; by: 'you' | 'agent'; limit?: boolean };
+export type Challenge = { finding: string; question: string; reason: string };
 
 export function runsDir(config: Config): string {
   return ensureDir(resolvePath(config.workspace.runs_dir));

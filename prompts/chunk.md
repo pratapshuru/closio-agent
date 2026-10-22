@@ -17,6 +17,7 @@ Return:
 - the files you changed,
 - what you verified and how,
 - any deviation from the plan and why,
+- Follow every decision already made, including the developer's grill answers. If something new needs deciding, settle it from the sources and those decisions and record it in `calls`; don't stop to ask.
 - `calls`: any new decision you made while coding that no source settled, or where you went against the ticket, spec or design, in the same shape as the plan's: `question`, `options`, `recommended`, `chosen`, `why`. Usually empty,
 - and `commit_summary`: a short imperative summary for the commit message (no ticket key, no prefix, under 70 characters, e.g. "add edit screen for overdue date config").
 

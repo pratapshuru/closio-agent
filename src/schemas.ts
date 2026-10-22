@@ -65,6 +65,10 @@ export const Chunk = z.object({
 });
 export type Chunk = z.infer<typeof Chunk>;
 
+// --ask: recon and the grill, before any plan is written
+export const Grill = z.object({ calls: z.array(Call) });
+export type Grill = z.infer<typeof Grill>;
+
 export const Plan = z.object({
   summary: z.string(),
   repos: z.array(z.object({ key: z.string(), role_in_ticket: z.string() })),

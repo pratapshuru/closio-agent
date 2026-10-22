@@ -142,11 +142,11 @@ stateDiagram-v2
 
 ### 4.3 Resume and pause
 
-- The state (`runs/KEY/state.json`) is saved after every meaningful step, written atomically so a crash mid-write can't corrupt it.
+- The state (`runs/KEY/.agent/state.json`) is saved after every meaningful step, written atomically so a crash mid-write can't corrupt it.
 - Any stop (a crash, laptop sleep, Ctrl+C, a question) leaves the state where it was. `agent run KEY` continues from the same step.
 - A chunk that was approved but whose commit failed (for example a git hook) commits on resume without being reviewed again.
 - Models can be switched on a run in progress (`agent run KEY --profile quality`).
-- All "wait for a person" cases (questions, missing design, a parent ticket not started) share one mechanism: write the question to `questions.md`, post it on Jira with the right person tagged, stop cleanly.
+- All "wait for a person" cases (questions, missing design, a parent ticket not started) share one mechanism: write the question to `questions.md`, post it on Jira with the right person tagged, stop cleanly. The one exception is `--ask` grill questions: they're for the developer at this laptop, so they're only asked at the terminal and never go to Jira; with nobody at the terminal the run stops until `agent run KEY` is run at one.
 - At an interactive terminal, questions are asked right there: press Enter to accept the bot's recommendation, type your own answer, or type `later` to send it to Jira. `agent watch` never waits on the terminal.
 
 ### 4.4 Why not LangGraph
@@ -314,6 +314,7 @@ flowchart LR
   - **a decision:** saved with the question, every option, the recommended one, what was chosen and why. All of them go to `decisions.md` and into the plan under "Decisions taken during the grill phase"; the few worth a second look go into the MR (for example "kept the repo's outlined button instead of Figma's filled one");
   - **a gap** (needed from another ticket or the spec and missing, or clashing): posted on Jira tagging the lead, on both tickets; work continues on a stated assumption;
   - **an extreme blocker:** a question to the right person (PM for product, tech lead for contracts and architecture, the developer for local things), with the bot's recommendation.
+- **`--ask`:** the developer answers the grill instead of the bot, and the plan is written only after that. Recon and the grill run as their own step; each open decision is shown one at a time at the terminal, with its options and the bot's recommendation (with nobody at the terminal, the run stops until someone runs it at one). Answers that open new decisions bring follow-up questions, up to `limits.grill_rounds` (default 3) rounds; then the plan is written once, on all the answers. Plan review settles new decisions from the sources and those answers, and asks the developer only when nothing can settle one; without `--ask` it never asks the developer. Coding never asks. Hard blockers for the PM or tech lead go to them on Jira in both modes. The reviewer checks the developer's decisions too: a challenge to one goes to the developer, with the reviewer's evidence, to keep or switch. Every decision records whether you or the bot made it.
 - **The plan** lists chunks in order (WS2, then WS1, then FE, then tests), what to reuse, the closest files to mirror, risks, upcoming tickets to build for, and a done checklist.
 - **Plan review:** the reviewer challenges it, up to 3 rounds. It can also settle the dev's questions if the code or spec already answers them. Points still open after 3 rounds are listed in the MR.
 - **Dependencies:** if the ticket needs another ticket's unmerged code, its branch is built on that ticket's branch (section 8.3).
@@ -659,10 +660,10 @@ Our VPN server sends its certificate (a normal GoDaddy wildcard certificate for 
 ## 13. Resume, visibility and convenience
 
 - **Live status line:** under each running step, one line rewritten every second: how long it has been running and what the bot is doing right now ("reading src/routes/healthCheckRoutes.js", "running npx vitest", "writing its answer"). After 20 seconds of silence it says "thinking". Logs written to a file get a quiet heartbeat instead.
-- **Run folder:** every prompt, answer, review, check result and the decision log (`decisions.md`: every call the bot made without asking) are kept per ticket.
+- **Run folder:** every prompt, answer, review, check result and the decision log (`decisions.md`: every decision made without asking a PM or lead, with its options and who decided it, the bot or you in the grill) are kept per ticket.
 - **`agent status KEY`:** plan, commits, MRs at a glance.
 - **`agent session KEY`:** a safe copy of the dev bot's conversation.
-- **Questions in the terminal**, with Jira as the fallback.
+- **Questions in the terminal**, with Jira as the fallback (except `--ask` grill questions, which are only asked at the terminal).
 - **Keeping the Mac awake:** run long jobs with `caffeinate -is agent run KEY` (macOS's built-in tool; `-i` blocks idle sleep, `-s` blocks system sleep on power). Closing the lid still sleeps the Mac.
 
 ---
@@ -793,7 +794,7 @@ agent replay REPLAY-550 --repo ws2targetsales --base 60afea5 --reference b57cb4c
 | **Baseline** | Which tests already failed before the ticket's changes |
 | **Worktree** | A separate checkout of a repo for one ticket, so your own checkout is untouched |
 | **Stacked branch** | A ticket's branch built on another ticket's unmerged branch |
-| **Decision (call)** | A choice recon left open and the bot settled itself, saved with its options, recommendation, choice and why in `decisions.md`; the most important appear in the MR as "Worth a second look" |
+| **Decision (call)** | A choice recon left open, settled by you in the grill (`--ask`) or by the bot, saved with its options, recommendation, choice and why in `decisions.md`; the most important appear in the MR as "Worth a second look" |
 | **Gap** | Something this ticket needs from another ticket or the spec that's missing or clashing |
 | **Change** | Something built differently from the ticket or spec |
 | **Impact check** | Which other tickets, uncovered work or spec sections a ticket's gaps and changes affect |

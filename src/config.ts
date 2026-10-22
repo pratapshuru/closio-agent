@@ -106,6 +106,8 @@ const ConfigSchema = z.object({
     gate_fix_attempts: z.number().default(2),
     agent_timeout_min: z.number().default(45),
     feedback_rounds: z.number().default(2),
+    // --ask: rounds of follow-up questions your grill answers may raise, before the plan is written
+    grill_rounds: z.number().default(3),
   }),
   design: z
     .object({

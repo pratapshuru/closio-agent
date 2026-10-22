@@ -187,6 +187,7 @@ limits:
   gate_fix_attempts: 2
   agent_timeout_min: 45
   feedback_rounds: 2
+  grill_rounds: 3
 
 # Where the pipeline finds design material when Figma MCP is not available.
 # Checked per ticket: runs/<KEY>/1-input/design/, then the frontend repo's .claude/<KEY>/ and .claude/<number>/

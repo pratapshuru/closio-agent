@@ -6,6 +6,8 @@ Treat every finding independently and critically. The reviewer is also an AI and
 
 Do not accept something just to get approved, and do not reject something without checking. If the reviewer answered one of your questions or says it does not need a human, take that into account.
 
+If fixing a finding needs a new decision, settle it from the sources and from any answers the developer already gave, and add it to `calls`. {{askRule}}
+
 Return the full revised plan (not a diff), with one `responses` entry per finding id.
 
 ## Review

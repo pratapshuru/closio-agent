@@ -61,6 +61,7 @@ Options for run/replay:
   --ticket-file <md>               use a local ticket instead of Jira (no Jira updates)
   --no-publish                     stop before push/MR
   --auto-answer                    never wait on humans; take the agent's recommendation and log it
+  --ask                            ask you every grill decision (options, recommendation) instead of letting the agent choose
 `;
 
 function parse(argv: string[]) {
@@ -76,6 +77,7 @@ function parse(argv: string[]) {
       'ticket-file': { type: 'string' },
       'no-publish': { type: 'boolean' },
       'auto-answer': { type: 'boolean' },
+      ask: { type: 'boolean' },
       repo: { type: 'string' },
       base: { type: 'string' },
       reference: { type: 'string' },
@@ -102,6 +104,7 @@ function startOptions(key: string, v: ReturnType<typeof parse>['values'], replay
     publish: !v['no-publish'],
     jira: !v['ticket-file'],
     autoAnswer: Boolean(v['auto-answer']) || Boolean(replay),
+    ask: Boolean(v.ask) && !v['auto-answer'] && !replay,
     replay,
     // for replays --base is the starting commit, handled separately
     base: !replay && v.base ? (/^[a-z]+-\d+$/i.test(v.base) ? v.base.toUpperCase() : v.base) : undefined,
@@ -246,6 +249,11 @@ async function main(argv: string[]): Promise<number> {
           return 0;
         }
         log(`continuing ${key} from '${run.state.phase}'`);
+        if (v.ask && !run.state.autoAnswer && !run.state.askGrill) {
+          run.state.askGrill = true;
+          log('  grill decisions will be asked of you from now on');
+          run.save();
+        }
         if (v['allow-edit']?.length) {
           run.state.allowEdit = [...new Set([...(run.state.allowEdit ?? []), ...v['allow-edit']])];
           log(`  may edit protected: ${run.state.allowEdit.join(', ')}`);
@@ -290,8 +298,11 @@ async function main(argv: string[]): Promise<number> {
       status(config, key);
       return 0;
     case 'answer': {
-      if (!key || !text) throw new Error('Usage: agent answer <KEY> "<answer text>"');
+      if (!key) throw new Error('Usage: agent answer <KEY> "<answer text>"');
       const run = Run.load(config, key);
+      // grill questions are answered one at a time at the prompt
+      if (run.state.waitingFor === 'grill') return drive(run);
+      if (!text) throw new Error('Usage: agent answer <KEY> "<answer text>"');
       run.state.questions.inbox.push(`Developer (CLI): ${text}`);
       run.save();
       if (run.state.phase !== 'awaiting_answers') {
