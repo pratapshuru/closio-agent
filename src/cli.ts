@@ -19,7 +19,7 @@ import { connect, disconnect, ensureVpn, reachable, vpnRunning } from './vpn.ts'
 const JIRA_CHECK_MINUTES = 5;
 
 // how often `agent watch` checks GitLab and Jira; checks cost no AI tokens
-const WATCH_INTERVAL_MINUTES = 30;
+const WATCH_INTERVAL_MINUTES = 10;
 
 const HELP = `closio-agent: ticket to merge request, with an independent reviewer
 
@@ -29,7 +29,7 @@ Usage:
   agent answer <KEY> "<text>"      answer the agent's pending questions
   agent feedback <KEY> "<text>"    give the agent feedback after the MR is open
   agent sync [KEY]                 check now: QA questions → answer; MRs merged → Ready For Test, conflicts → rebase, comments → fix
-  agent watch [--interval 30]      answer QA-Question comments every 5 min; check open MRs and paused runs every N min (default 30)
+  agent watch [--interval 10]      answer QA-Question comments every 5 min; check open MRs and paused runs every N min (default 10)
   agent sprint-plan [KEY]          once per sprint: AI reads the whole sprint and writes a local report
                                    (model: profile's planner; override with --set planner=provider:model[:effort])
                                    (dependencies, start order, FE/BE pairs, collisions, ticket issues)

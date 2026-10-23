@@ -484,7 +484,7 @@ One terminal left running looks after every open ticket.
 ```mermaid
 flowchart TD
   W([agent watch]) --> J[Every 5 min: Jira, no VPN needed]
-  W --> G[Every 30 min: GitLab]
+  W --> G[Every 10 min: GitLab]
   J --> Q{Comment starts<br/>QA-Question?}
   Q -- yes --> A[Dev bot answers in plain words]
   Q -- no, after merge --> H[Heads-up line in your terminal<br/>if it may need you]

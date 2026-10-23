@@ -9,7 +9,7 @@ repos:
 
 # Your techspec files, newest first. Every run gets all of them; add a new one at the top when it arrives.
 # techspecs:
-#   - ~/Downloads/Tech Spec - Incentive (Business 2).pdf
+#   - ~/specs/newest-spec.pdf
 
 # people:
 #   tech_lead: { name: Your Lead, email: lead@company.com, gitlab_username: lead.name }
