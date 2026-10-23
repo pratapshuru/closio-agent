@@ -1026,6 +1026,10 @@ export class Run {
 
   // what a dev would raise with the lead before building; the run keeps going on the stated assumption
   private async postGaps(gaps: S.Gap[]): Promise<void> {
+    // a ticket's own unclear details are the grill's, not the lead's: log them, don't post them
+    const own = gaps.filter((g) => !g.ticket.trim() || g.ticket.trim().toUpperCase() === this.state.key);
+    for (const g of own) this.decide('question', `${g.what.trim()} Went with: ${g.assumption.trim()}`, 'the ticket left it open, so it was settled from the code and sibling screens');
+    gaps = gaps.filter((g) => !own.includes(g));
     for (const g of gaps) this.decide('gap', g.what.trim(), `Assuming ${g.assumption.trim().replace(/\.$/, '')} until the lead replies${g.alternative.trim() ? `; if not, ${g.alternative.trim().replace(/\.$/, '')}` : ''}.`);
     const already = new Set(this.state.gapsPosted ?? []);
     gaps = gaps.filter((g) => !already.has(g.what.trim()));
@@ -1941,13 +1945,14 @@ export class Run {
     const impact = this.state.impact;
     const headsUp = impact
       ? [
-          ...impact.affected.map((a) => `${a.ticket} needs updating: ${a.note.trim()}`),
+          ...impact.affected.filter((a) => a.ticket.trim().toUpperCase() !== this.state.key && !/^no change/i.test(a.note.trim())).map((a) => `${a.ticket} needs updating: ${a.note.trim()}`),
           ...impact.missing_work.map((m) => `No ticket covers: ${m.title.trim()} (${m.repo})`),
           ...impact.spec.map((x) => `Spec ${x.section} needs updating: ${x.should.trim()}`),
         ]
       : [];
     // a mismatch with a connected ticket that was noted rather than fixed affects that ticket too
-    headsUp.push(...(this.state.alignment ?? []).filter((a) => a.action !== 'fixed').map((a) => `Doesn't line up with ${a.ticket}: ${a.problem.trim().replace(/\.$/, '')}.`));
+    const listed = (this.state.changes ?? []).map((c) => `${c.what} ${c.why}`).join(' ');
+    headsUp.push(...(this.state.alignment ?? []).filter((a) => a.action !== 'fixed' && !listed.includes(a.ticket)).map((a) => `Doesn't line up with ${a.ticket}: ${a.problem.trim().replace(/\.$/, '')}.`));
     const fixes = this.state.parentRun && this.state.bugTriage?.verdict === 'bug' ? `Fixes a bug in ${this.state.parentRun.key}: ${this.state.bugTriage.cause.trim()}` : '';
     return [
       fixes,

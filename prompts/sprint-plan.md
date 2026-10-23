@@ -18,7 +18,7 @@ You are a senior tech lead preparing {{sprint}} for a team of developers who wil
 
 - **dependencies:** ticket B needs code that ticket A creates **in the same repo**, and A is not merged yet, so B must start on A's branch. One entry per pair and repo, one ticket key each.
   - The typical case: Edit needs Add's form. If neither is built, Edit depends on Add. If one is already built, the other depends on it.
-  - Not a dependency: an API contract, a deploy order, logic that must run in a certain order, sharing a table or business rules, or anything you'd describe as "not code-level". Those go in `fe_be_pairs`, `collisions` or `build_for_reuse`.
+  - Not a dependency: two tickets that only edit the same file or screen (that's a collision, even if one should land first), an API contract, a deploy order, logic that must run in a certain order, sharing a table or business rules, or anything you'd describe as "not code-level". The test: would B fail to build or work without A's new code? If not, it's not a dependency. Those go in `fe_be_pairs`, `collisions` or `build_for_reuse`.
   - A ticket in another repo can never be a dependency, because a branch can only be built on a branch of the same repo.
 - **start_order:** only tickets not started yet (to do, blocked, or in development with no branch), in a sensible order so parents start before the tickets that build on them, each with a short reason. Leave built tickets out.
 - **fe_be_pairs:** FE tickets that call an endpoint a BE ticket builds or changes (and WS1 routes that forward to a WS2 endpoint), with the contract they must agree on (method, path, fields, error codes) as far as the tickets define it.

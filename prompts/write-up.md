@@ -19,7 +19,7 @@ Produce:
   - left out or deferred (`removed`);
   - an API, field, error code or shared component interface that changed (`contract`).
 
-  `what` is what's different, in plain words, and `why` is one plain sentence. How the code is organised never counts. Usually this list is empty. The bar, from a different ticket:
+  `what` is what's different, in plain words, and `why` is one plain sentence. How the code is organised never counts, and neither does not doing something the ticket didn't ask for. If a difference also goes against a connected ticket, name that ticket's key in `what` or `why`. Usually this list is empty. The bar, from a different ticket:
   > - kind: ticket, what: "End date is optional, not required", why: "the BE already accepts it empty and the ticket didn't say either way"
   > - kind: added, what: "Added a `service` field to the health response", why: "so the FE can tell services apart"
 - `qa_curls`: {{curlRule}}
