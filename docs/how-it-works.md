@@ -194,7 +194,7 @@ Every step has a fixed answer shape (a zod schema), for example:
 - **Plan:** repos, facts with sources, calls, gaps, questions (who to ask, blocking or not, recommendation), chunks (repo, files, is it the tests chunk, done when), reuses, files to mirror, risks, upcoming tickets, done checklist, dependencies, design status.
 - **Review:** verdict (approved / changes required / needs a human), findings (severity, required or optional, location), status of earlier findings, assessments of the dev's questions.
 - **Dev work:** files changed, verification, deviations from the plan, new calls, commit summary, a response (accept or reject with reasoning) to each finding.
-- **Write-up:** changes from the ticket, QA curls (BE), and the handoff note for connected tickets.
+- **Write-up:** changes from the ticket, QA curls (BE), and a handoff note when another ticket builds on this one.
 
 Every field is required (nullable when optional), because Codex's strict mode rejects optional fields; this lets one schema work for both tools. Answers are validated again by the program; a bad answer is retried once.
 
@@ -356,7 +356,7 @@ flowchart TD
 2. **Whole-ticket audit** by the same reviewer, against the plan's done checklist: every acceptance criterion, states, edge cases, existing flows that must still work.
 3. **Cleanup pass:** a separate simplifier suggests behaviour-preserving cleanups; the dev applies them; checks and the reviewer must pass, otherwise the cleanup is discarded rather than argued about.
 4. **Alignment check** with connected tickets (8.2).
-5. **Write-up:** changes from the ticket, QA curls for API tickets, and the handoff note for connected tickets (posted on the Jira card, with a copy in `runs/KEY/handoff-note.md`). The MR is built by code from `decisions.md`, the changes, the impact check and the deploy notes, not written freehand; the QA curls and handoff note go on the Jira card.
+5. **Write-up:** changes from the ticket, QA curls for API tickets, and a handoff note only when an existing ticket builds on this one (posted on the Jira card, with a copy in `runs/KEY/handoff-note.md`). The MR is built by code from `decisions.md`, the changes, the impact check and the deploy notes, not written freehand; the QA curls and any handoff note go on the Jira card.
 6. **Deploy notes** (BE only, read from the diff, 7.7).
 7. **Impact check**, only if there were gaps or changes (section 9).
 
@@ -365,14 +365,14 @@ flowchart TD
 **MR description**, short and plain, each part shown only when it has something:
 - "Fixes a bug in SCRUM-xxx: \<cause\>" (bug tickets) and "Depends on SCRUM-xxx: review that one first" (stacked branches), one line each;
 - **Different from the ticket** (for QA and the PM);
-- **Heads up**: only when something must change elsewhere: the impact check's findings (another ticket to update, work no ticket covers, a spec line now wrong) and any mismatch with a connected ticket that was noted rather than fixed, one line each;
+- **Heads up**: only when something must change elsewhere: another ticket to update or a spec line now wrong (from the impact check), and any mismatch with a connected ticket that was noted or needs a human rather than fixed, one line each; no section at all when there's nothing;
 - **Decisions**, folded: every decision from `decisions.md`. A grill decision shows the question, what was chosen and why in one sentence, the other options, and who decided; a gap shows the assumption and the fallback; a blocker answer shows the question and the answer; a question settled without the PM or lead, or a UI built without the design, shows in a line;
 - **Unresolved reviewer concern**: only when the reviewer still saw a problem after three rounds, with the reviewer's point and, when the dev gave one, its view, in a line;
 - **Deploy**: one short line for BE (env vars, migrations, order).
 
 Code-review back-and-forth and small coding choices stay in the run folder, not in the MR or `decisions.md`. A record of what happened (branching, rebase conflict calls, alignment, bug triage, QA replies) sits under "Other notes" in `decisions.md` and stays out of the MR description; a rebase with real judgement calls also leaves its own short note on the MR. Small choices the dev made while coding are kept in the run folder (`.agent/`). When there's nothing to show, the MR says "Built as the ticket says; no open decisions."
 
-**Jira:** In Development when the run starts; Code Review when MRs open, with one comment holding the MR links, what differs from the ticket, QA curls for APIs, any depends-on, and the agent session (the status itself says it's in code review), plus the handoff note as its own comment; Ready For Test when every MR merges, with deploy notes. Comments tag people with real Jira mentions. If Jira ever rejects the formatting of a comment, it's resent as plain text so publishing never blocks.
+**Jira:** In Development when the run starts; Code Review when MRs open, with one comment holding the MR links, what differs from the ticket, QA curls for APIs, any depends-on, and the agent session (the status itself says it's in code review), plus the handoff note as its own comment when there is one; Ready For Test when every MR merges, with deploy notes. Comments tag people with real Jira mentions. If Jira ever rejects the formatting of a comment, it's resent as plain text so publishing never blocks.
 
 **Deploy notes (BE only)**, read from the diff by code, shown in the MR and posted on Jira at merge:
 - env vars added to or removed from `.env.example`;
@@ -448,7 +448,7 @@ flowchart TD
 
 ### 8.5 Handoff notes for later tickets
 
-Each run writes a short note for connected tickets: what this ticket built that others should reuse and exactly where (components, functions, endpoints and their contract), decisions that affect them, gotchas, review lessons, and what was left for upcoming tickets. When the MR opens it's posted as its own comment on the Jira card ("Handoff for connected tickets"), with a copy in `runs/KEY/handoff-note.md`. A connected ticket's run reads it from the card, so it works on any laptop, and the base prompts tell the dev to reuse what it points to and the reviewer to check that.
+A run writes a handoff note only when an existing ticket builds on or uses it: one the plan lists as upcoming, one the sprint plan says depends on it, pairs with it or reuses it, or another run stacked on its branch. No such ticket, no note: a note for a card that doesn't exist yet helps nobody. The note holds only what those tickets can't learn from the code or their own ticket (differences from the ticket or spec, gotchas, the contract to match, review lessons), at most 5 one-line bullets, never file paths or a summary of what was built. When the MR opens it's posted as its own comment on the Jira card ("Handoff for connected tickets"), with a copy in `runs/KEY/handoff-note.md`. A connected ticket's run reads it from the card, so it works on any laptop, and the base prompts tell the dev to read it and that ticket's code before planning, and the reviewer to check the work follows it.
 
 ---
 
@@ -470,7 +470,7 @@ flowchart LR
 
 - **Gaps** (at planning): what this ticket needs from other tickets or the spec that isn't there, or clashes. Example: "AGENT-8 needs `target_summary` in the response; the spec has it, AGENT-9 doesn't. Going ahead assuming it gets added."
 - **Changes** (at the write-up, and from feedback rounds): only what makes the ticket or spec wrong now: behaviour that differs from the ticket or spec, things added beyond the ticket, things left out, contract changes. Internal choices never count.
-- **Impact check** (one step in the same dev conversation, only when there were gaps or changes): which other tickets must change and how, work no ticket covers (written as a draft ticket), and spec sections that are now wrong. Saved locally; when it finds something, the MR's Heads up lists it, one line each. `agent impact KEY --post` notes it on the affected tickets after you've read it. Draft tickets stay with you and the lead.
+- **Impact check** (one step in the same dev conversation, only when there were gaps or changes): which other tickets must change and how, work no ticket covers (written as a draft ticket), and spec sections that are now wrong. Saved locally in `impact.md`; tickets to update and spec fixes go in the MR's Heads up, one line each, while work no ticket covers stays in `impact.md`. `agent impact KEY --post` notes it on the affected tickets after you've read it. Draft tickets stay with you and the lead.
 - A ticket that just follows its ticket triggers nothing.
 
 ---

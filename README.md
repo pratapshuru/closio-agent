@@ -14,7 +14,7 @@ How it works inside, and why: [docs/how-it-works.md](docs/how-it-works.md).
 1. **Intake:** reads the ticket, attachments, your techspecs, connected tickets and the code. Moves the card to In Development. Makes its own copy of each repo, so your checkout is never touched. Notes which tests already fail, so those don't count against it later.
 2. **Plan:** first it checks the sources, then lists what's still unclear and makes a call on each one (or asks you, with `--ask`). Every call goes in `decisions.md` with the options and why. Then it writes a plan in small chunks, and a second AI reviews it until they agree.
 3. **Build:** one chunk at a time. The agent codes, the pipeline runs the tests itself, the reviewer checks the diff, and the approved chunk becomes one commit.
-4. **MR:** full tests and build, one last review of the whole ticket, a clean-up pass, then one MR per repo. The card moves to Code Review with the MR links, QA curls and a handoff note for connected tickets.
+4. **MR:** full tests and build, one last review of the whole ticket, a clean-up pass, then one MR per repo. The card moves to Code Review with the MR links and QA curls, plus a handoff note when another ticket builds on this one.
 5. **After the MR:** with `agent watch` running, it fixes the reviewers's MR comments, answers QA on Jira and rebases on conflicts. When all MRs are merged, the card moves to Ready For Test.
 
 ### What it can't get around
@@ -167,7 +167,7 @@ To turn a run that already has branches into a simulation, start fresh: `agent c
 - **Sprint plan:** run `agent sprint-plan` once at the start of a sprint. It reads every ticket and writes a report: which ticket needs another's code, start order, FE/BE pairs, tickets that touch the same files, what to build reusably, and unclear tickets. Each ticket's run reads its own part.
 - **Building on another ticket:** if your ticket needs another ticket's unmerged code (like Edit reusing Add's form), it starts on that ticket's branch, and the MR says which one to merge first.
 - **Alignment check:** before every MR it compares the work with connected tickets (contracts, shared code) and fixes small mismatches.
-- **Handoff notes:** when a ticket's MR opens, it posts a note on its Jira card for connected tickets: what it built to reuse, the contract, gotchas. Their runs read it, on any laptop.
+- **Handoff notes:** only when an existing ticket builds on this one (like Edit on Add, or the other side of an API), it posts a short note on the Jira card: gotchas, the contract, where it differs from the ticket. Their runs read it, on any laptop. No such ticket, no note.
 
 ## QA questions
 

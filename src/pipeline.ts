@@ -13,9 +13,9 @@ import { isOurComment, Jira } from './jira.ts';
 import { AgentError, claudeSessionFile, runAgent, type Access } from './providers.ts';
 import * as S from './schemas.ts';
 import { buildSprintContext, findBranches, HANDOFF_HEADING, issueWithLatestComments, mentionedKeys, relatedText, type TicketBranch } from './sprint.ts';
-import { adviceFor } from './sprintplan.ts';
+import { adviceFor, consumersOf } from './sprintplan.ts';
 import { isMergedInto, ownSubjects, resolveRef, startOn, startRestack, verifyRestack } from './stack.ts';
-import { hasRun, loadState, realRunBranches, runDir, saveState, scratchDir, totals, type Challenge, type GrillAnswer, type Phase, type RunState } from './state.ts';
+import { hasRun, listRuns, loadState, realRunBranches, runDir, saveState, scratchDir, totals, type Challenge, type GrillAnswer, type Phase, type RunState } from './state.ts';
 import { ensureDir, exec, fill, log, now, PipelineStop, readJson, render, TOOL_ROOT, writeJson, writeText } from './util.ts';
 
 export type StartOptions = {
@@ -259,7 +259,7 @@ export class Run {
       [this.file('plan.md'), 'the plan'],
       [this.file('impact.md'), 'what this ticket affects elsewhere'],
       [this.file('handoff-note.md'), 'the note later tickets read'],
-      ...Object.keys(s.repos).map((k) => [this.file(`mr-${k}.md`), `MR text for ${k}`]),
+      ...Object.entries(s.repos).filter(([, r]) => r.commits.length).map(([k]) => [this.file(`mr-${k}.md`), `MR text for ${k}`]),
       [this.file('deployment.md'), 'deploy notes'],
     ].filter(([f]) => have(f)).map(([f, what]) => `- [${rel(f)}](${rel(f)}): ${what}`);
     writeText(path.join(this.dir, 'README.md'), [
@@ -1835,6 +1835,7 @@ export class Run {
     if (changed) await this.finalGates('final-recheck');
 
     log('write-up');
+    const consumers = this.handoffConsumers();
     const writeUp = await this.call('dev', 'write-up', render(prompt('write-up'), {
       commits: this.commitList(),
       gates: finalResults(),
@@ -1842,7 +1843,12 @@ export class Run {
       curlRule: this.state.plan?.needs_qa_curl
         ? 'for every endpoint added or changed, a ready-to-run curl for QA against the shared development environment (use placeholders like <BASE_URL> and <TOKEN>, never real secrets), with the expected response and the key error cases.'
         : 'empty list unless this ticket adds or changes an API.',
+      handoffFor: consumers.length
+        ? `These existing tickets build on or use this one: ${consumers.join(', ')}. Write it for them.`
+        : 'No existing ticket builds on or uses this one, so leave it empty.',
     }), S.WriteUp, 'read');
+    // a note for tickets that don't exist yet helps nobody, so it's never posted
+    if (!consumers.length) writeUp.handoff_note = '';
     for (const [field, value] of Object.entries(writeUp)) {
       if (typeof value === 'string') (writeUp as Record<string, unknown>)[field] = stripFieldTags(value);
     }
@@ -1852,7 +1858,7 @@ export class Run {
     this.state.changes = writeUp.changes ?? [];
     if (this.state.changes.length || this.state.plan?.gaps?.length) await this.impact();
     if (writeUp.handoff_note.trim()) writeText(this.file('handoff-note.md'), `# Handoff from ${this.state.key}: ${this.state.summary}\n\n${writeUp.handoff_note}`);
-    for (const key of Object.keys(this.state.repos)) writeText(this.file(`mr-${key}.md`), this.mrDescription(key));
+    for (const [key, r] of Object.entries(this.state.repos)) if (r.commits.length) writeText(this.file(`mr-${key}.md`), this.mrDescription(key));
     this.state.phase = this.state.publish ? 'publishing' : 'done';
     this.save();
   }
@@ -1904,7 +1910,8 @@ export class Run {
       const example = await g.git(r.worktree, 'show', 'HEAD:.env.example').catch(() => '');
       const missing = [...used].filter((k) => k !== 'NODE_ENV' && !new RegExp(`^\\s*${k}=`, 'm').test(example));
       if (missing.length) lines.push(`set ${missing.map((k) => `\`${k}\``).join(', ')}, missing from .env.example (${r.key})`);
-      const newFiles = (await g.git(r.worktree, 'diff', '--name-only', '--diff-filter=A', range).catch(() => '')).split('\n').filter(Boolean);
+      // a test for a migration is not a migration
+      const newFiles = (await g.git(r.worktree, 'diff', '--name-only', '--diff-filter=A', range).catch(() => '')).split('\n').filter((f) => f && !/(^|\/)(tests?|__tests__)\/|\.(spec|test)\./.test(f));
       const migrations = newFiles.filter((f) => /(^|\/)migrations\//.test(f));
       const seeders = newFiles.filter((f) => /(^|\/)seeders\//.test(f));
       if (migrations.length) lines.push(`run ${migrations.length} migration${migrations.length > 1 ? 's' : ''} (${r.key})`);
@@ -1937,22 +1944,34 @@ export class Run {
     return now;
   }
 
+  // existing tickets that build on or use this one: the plan's own list, the sprint plan, and other runs stacked on it
+  private handoffConsumers(): string[] {
+    const fromPlan = (this.state.plan?.upcoming ?? []).map((u) => u.ticket);
+    const fromSprint = consumersOf(this.config, this.state.context?.sprintName, this.state.key);
+    const stacked = listRuns(this.config)
+      .filter((r) => r.key !== this.state.key)
+      .filter((r) => Object.values(r.repos).some((x) => x.parent?.ticket === this.state.key))
+      .map((r) => r.key);
+    // only real ticket keys: "the refresh service card" isn't a ticket anyone can read a note on
+    const keys = [...fromPlan, ...fromSprint, ...stacked].map((k) => k.trim()).filter((k) => /^[A-Z][A-Z0-9]*-\d+$/.test(k));
+    return [...new Set(keys)].filter((k) => k !== this.state.key);
+  }
+
   // short and human: what's different from the ticket, the decisions to double-check (folded), any open concern, deploy
   mrDescription(repoKey: string): string {
     const repo = this.state.repos[repoKey];
     const decisions = (this.state.decisions ?? []).filter((d) => !d.note);
-    // only what needs to change elsewhere: other tickets, work nobody has, the spec
+    // only what this MR forces to change elsewhere: other tickets and the spec; missing work stays in impact.md
     const impact = this.state.impact;
     const headsUp = impact
       ? [
           ...impact.affected.filter((a) => a.ticket.trim().toUpperCase() !== this.state.key && !/^no change/i.test(a.note.trim())).map((a) => `${a.ticket} needs updating: ${a.note.trim()}`),
-          ...impact.missing_work.map((m) => `No ticket covers: ${m.title.trim()} (${m.repo})`),
           ...impact.spec.map((x) => `Spec ${x.section} needs updating: ${x.should.trim()}`),
         ]
       : [];
     // a mismatch with a connected ticket that was noted rather than fixed affects that ticket too
-    const listed = (this.state.changes ?? []).map((c) => `${c.what} ${c.why}`).join(' ');
-    headsUp.push(...(this.state.alignment ?? []).filter((a) => a.action !== 'fixed' && !listed.includes(a.ticket)).map((a) => `Doesn't line up with ${a.ticket}: ${a.problem.trim().replace(/\.$/, '')}.`));
+    const listed = new Set((this.state.changes ?? []).flatMap((c) => `${c.what} ${c.why}`.match(/\b[A-Z][A-Z0-9]*-\d+\b/g) ?? []));
+    headsUp.push(...(this.state.alignment ?? []).filter((a) => a.action !== 'fixed' && !listed.has(a.ticket.trim())).map((a) => withWhy(`Doesn't line up with ${a.ticket}: ${a.problem.trim().replace(/\.$/, '')}`, a.detail)));
     const fixes = this.state.parentRun && this.state.bugTriage?.verdict === 'bug' ? `Fixes a bug in ${this.state.parentRun.key}: ${this.state.bugTriage.cause.trim()}` : '';
     return [
       fixes,

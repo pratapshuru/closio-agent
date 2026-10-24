@@ -1,4 +1,4 @@
-All chunks are committed and the final review passed. Write the write-up: what's different from the ticket, the QA curls, and the handoff note for connected tickets. The program builds the MR from the decisions log and these fields, so keep every field short.
+All chunks are committed and the final review passed. Write the write-up: what's different from the ticket, the QA curls, and the handoff note (only if a ticket below builds on this one). The program builds the MR from the decisions log and these fields, so keep every field short.
 
 **Tone:** write like a developer posting to their own team. Plain words, short, specific, full sentences. No jargon, no filler, no restating the ticket. If a field has nothing real to say, leave it empty (empty string or empty list). Never write "None".
 
@@ -23,9 +23,4 @@ Produce:
   > - kind: ticket, what: "End date is optional, not required", why: "the BE already accepts it empty and the ticket didn't say either way"
   > - kind: added, what: "Added a `service` field to the health response", why: "so the FE can tell services apart"
 - `qa_curls`: {{curlRule}}
-- `handoff_note`: a short, lean note for connected tickets that come later (an Edit after this Add, a FE ticket calling this BE endpoint). It's posted on the Jira card, where their runs read it. At most about 15 lines, facts only. Cover:
-  - what this ticket built that others should reuse, and exactly where (components, functions, types, endpoints and their contract);
-  - decisions that affect them, and why;
-  - gotchas;
-  - review lessons;
-  - what was deliberately left for upcoming tickets.
+- `handoff_note`: {{handoffFor}} When written, it's posted on the Jira card, where their runs read it. Only what those tickets can't learn from the code or their own ticket: where this ticket differs from the ticket or spec, gotchas, the contract the other side must match, and review lessons. Never file paths, column lists or a summary of what was built. At most 5 bullets, one line each. If there's nothing like that, leave it empty.

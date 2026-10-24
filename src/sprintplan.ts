@@ -124,3 +124,16 @@ export async function runSprintPlan(config: Config, jira: Jira, opts: { key?: st
   writeText(files.md, renderPlan(sprint.name, plan, dropped));
   return { md: files.md, costUsd: result.costUsd ?? 0 };
 }
+
+// tickets the sprint plan says build on or use this one (one of the sources for who gets a handoff note)
+export function consumersOf(config: Config, sprintName: string | undefined, key: string): string[] {
+  if (!sprintName) return [];
+  const { json } = planFiles(config, sprintName);
+  if (!fs.existsSync(json)) return [];
+  const p = readJson<S.SprintPlan>(json);
+  return [
+    ...p.dependencies.filter((d) => d.depends_on === key).map((d) => d.ticket),
+    ...p.fe_be_pairs.filter((x) => x.fe === key || x.be === key).map((x) => (x.fe === key ? x.be : x.fe)),
+    ...p.build_for_reuse.filter((b) => b.ticket === key).flatMap((b) => b.for_tickets),
+  ];
+}

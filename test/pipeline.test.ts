@@ -75,7 +75,7 @@ describe('pipeline', () => {
     const prompts: Record<string, string> = {};
     registerFake('plan', (call) => {
       prompts.plan = call.prompt;
-      return plan();
+      return plan({ upcoming: [{ ticket: 'T-2', needs: 'the shared form' }] });
     });
     registerFake('plan-review', (call) => {
       prompts.review = call.prompt;

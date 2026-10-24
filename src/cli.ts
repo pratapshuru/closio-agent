@@ -138,7 +138,7 @@ async function drive(run: Run, opts?: StartOptions): Promise<number> {
       return err.kind === 'waiting' ? 0 : 1;
     }
     console.error(`\n${run.state.key} stopped in phase '${run.state.phase}': ${(err as Error).message}`);
-    console.error(`Fix the cause and re-run \`agent run ${run.state.key}\` to continue from there. Logs: ${path.join(run.dir, 'logs')}`);
+    console.error(`Fix the cause and re-run \`agent run ${run.state.key}\` to continue from there. Logs: ${run.file('logs')}`);
     return 1;
   }
 }

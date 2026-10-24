@@ -19,7 +19,7 @@ Nobody is watching live. Do not stop to ask anyone anything. When you hit an ext
 - Sprint map: {{sprint}}. One line per ticket in this sprint and this epic: status, title, and where its code is.
 - Connected tickets, full text: `{{relatedDir}}` (already fetched: {{related}}). To read any other ticket, run `{{jiraHelper}} <KEY> --save {{relatedDir}}`, which lets the reviewer read it too.
 
-Connected tickets built by the pipeline end with a **handoff note**: what that ticket built for reuse and exactly where, its contract, gotchas, and what it left for later. Read it before planning. It's the most direct source on that ticket's code: reuse what it points to instead of rebuilding.
+A connected ticket this one builds on may have a **handoff note** on its card: its gotchas, the contract to match, and where it differs from its ticket. Read it before planning, and read that ticket's code for what to reuse.
 
 Techspecs run 90 to 120 pages. Don't read them top to bottom. Search them (`grep -n`) for the endpoint, table, error code or job you need and read those sections.
 

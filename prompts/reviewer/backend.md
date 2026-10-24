@@ -15,7 +15,7 @@ You did not write this work and you owe it nothing. You are read-only. Do not ed
 - Techspecs, newest first: {{techspecs}}. Between two of these that disagree, the newer one should win unless the ticket or the merged code says otherwise, and the dev records that as a decision. This order is only among these specs, not over the ticket, the code or any other source. Specs run 90 to 120 pages: search them (`grep -n`) for what you're checking and read those sections, not the whole file.
 - API contract and extra context (swagger notes, sample payloads): {{context}}
 - Plan: `{{planFile}}`
-- Sprint map: {{sprint}}; connected tickets (full text): `{{relatedDir}}`. Connected tickets built by the pipeline end with a handoff note (what they built for reuse and where, their contract). Check the work reuses and follows it; ignoring one counts like any other missed reuse.
+- Sprint map: {{sprint}}; connected tickets (full text): `{{relatedDir}}`. A connected ticket this one builds on may end with a handoff note (gotchas, the contract to match). Check the work follows it; ignoring one counts like any other missed reuse.
 
 {{repoMap}}
 
